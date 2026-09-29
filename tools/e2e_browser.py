@@ -77,6 +77,9 @@ def configure(page, token: str, port: int = API_PORT) -> None:
 
 # 페이지가 만든 WebSocket과 카메라 스트림을 센다 (CDP로 주입되므로 페이지 CSP와 무관)
 PROBE = """
+window.__csp = [];
+document.addEventListener("securitypolicyviolation",
+  (e) => window.__csp.push(e.violatedDirective + " " + e.blockedURI));
 window.__sockets = [];
 const NativeWS = window.WebSocket;
 window.WebSocket = class extends NativeWS {
@@ -88,6 +91,23 @@ const gum = md.getUserMedia.bind(md);
 md.getUserMedia = async (c) => { const s = await gum(c); window.__streams.push(s); return s; };
 """
 LIVE_TRACKS = "() => window.__streams.flatMap(s => s.getTracks()).filter(t => t.readyState === 'live').length"
+
+
+def watch(page, errors: list) -> None:
+    """페이지 오류와 콘솔 오류를 모은다. 예상된 것(자동 favicon 요청, 서버를 일부러 끈 뒤의 WebSocket 실패)은 뺀다."""
+    page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
+
+    def on_console(msg):
+        if msg.type != "error":
+            return
+        if "favicon.ico" in (msg.location or {}).get("url", "") or msg.text.startswith("WebSocket connection to"):
+            return
+        errors.append(f"console: {msg.text}")
+    page.on("console", on_console)
+
+
+def csp_violations(page) -> list:
+    return page.evaluate("() => window.__csp")
 
 
 def blackhole(port: int) -> socket.socket:
@@ -130,7 +150,7 @@ def main() -> None:
             context.add_init_script(PROBE)
             page = context.new_page()
             errors = []
-            page.on("pageerror", lambda e: errors.append(str(e)))
+            watch(page, errors)
             page.goto(PAGE)
             status = page.locator("#status")
             expect(status).to_have_text("설정 필요")
@@ -168,6 +188,7 @@ def main() -> None:
             step("시작·카메라 전환을 빠르게 두 번 눌러도 소켓 1개, 카메라 트랙 1개, 연결 유지")
 
             page2 = context.new_page()
+            watch(page2, errors)
             page2.goto(PAGE)
             page2.click("#start")
             expect(page2.locator("#status")).to_have_text("연결됨", timeout=30_000)
@@ -206,8 +227,10 @@ def main() -> None:
             page.click("#start")  # 정지
             step("응답 없는 서버면 '연결 중'에 머물지 않고 '서버 꺼짐'으로 재시도")
 
+            errors += [f"CSP: {v}" for v in csp_violations(page)]
             if errors:
                 raise SystemExit(f"페이지 오류: {errors}")
+            step("페이지 오류·콘솔 오류·CSP 위반 없음")
             browser.close()
     finally:
         for proc in (api, web):
