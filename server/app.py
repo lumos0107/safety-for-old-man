@@ -39,6 +39,20 @@ async def _send(ws: WebSocket, payload: dict) -> bool:
         return False  # 닫힌 연결로 보내다 실패하면 조용히 끝낸다
 
 
+def _frame_seq(text: str) -> int | None:
+    """{"type":"frame","seq":N}이면 N(0 이상 정수), 아니면 None."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or data.get("type") != "frame":
+        return None
+    seq = data.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+        return None
+    return seq
+
+
 def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
     # 모델 호출이 겹치지 않도록 추론 전용 스레드는 하나만 둔다 (연결이 대체되는 순간 포함)
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pose")
@@ -51,6 +65,9 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
         executor.shutdown(wait=False, cancel_futures=True)
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+    def process(data: bytes) -> dict:
+        return predictor(decode_jpeg(data, settings.max_side))
 
     async def authenticate(ws: WebSocket) -> bool:
         try:
@@ -71,9 +88,39 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
         return True
 
     async def serve_frames(ws: WebSocket) -> None:
-        # Task 6에서 프레임 처리로 바꾼다. 지금은 모든 메시지에 bad_message로 답한다.
-        while (await ws.receive())["type"] != "websocket.disconnect":
-            if not await _send(ws, {"type": "error", "code": "bad_message"}):
+        loop = asyncio.get_running_loop()
+        pending_seq = None
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                return
+            text, data = msg.get("text"), msg.get("bytes")
+            if text is not None:
+                seq = _frame_seq(text)
+                if seq is not None:
+                    pending_seq = seq  # frame이 연속으로 오면 나중 것을 쓴다
+                    continue
+                pending_seq = None
+                if not await _send(ws, {"type": "error", "code": "bad_message"}):
+                    return
+                continue
+            if data is None or pending_seq is None:
+                if not await _send(ws, {"type": "error", "code": "bad_message"}):
+                    return
+                continue
+            seq, pending_seq = pending_seq, None
+            if len(data) > settings.max_bytes:
+                reply = {"type": "error", "code": "too_large", "seq": seq}
+            else:
+                try:
+                    result = await loop.run_in_executor(executor, process, data)
+                    reply = {"type": "result", "seq": seq, **result}
+                except BadImage:
+                    reply = {"type": "error", "code": "bad_image", "seq": seq}
+                except Exception as exc:  # GPU 메모리 부족 등. 연결은 유지한다
+                    log.warning("추론 실패: %s", type(exc).__name__)  # 예외 종류만, 이미지·메시지 없이
+                    reply = {"type": "error", "code": "server_error", "seq": seq}
+            if not await _send(ws, reply):
                 return
 
     @app.get("/health")
