@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   CLOSE, STATUS, closePolicy, retryDelayMs, normalizeServerUrl, cleanToken,
   fitContain, scaleToLongSide, SKELETON, toCanvas, visibleSegments, visiblePoints, ema,
+  COLORS, pointColor, segmentColor,
 } from "../lib.js";
 
 test("재연결하지 않는 종료 코드", () => {
@@ -76,8 +77,37 @@ test("좌표 변환과 신뢰도 필터", () => {
   kpts[5] = [0.2, 0.3, 0.9];  // 왼쪽 어깨
   kpts[6] = [0.4, 0.3, 0.8];  // 오른쪽 어깨
   kpts[7] = [0.2, 0.5, 0.4];  // 왼쪽 팔꿈치 (신뢰도 낮음)
-  assert.deepEqual(visibleSegments(kpts, rect, 0.5), [[30, 80, 50, 80]]);
-  assert.deepEqual(visiblePoints(kpts, rect, 0.5), [[30, 80], [50, 80]]);
+  assert.deepEqual(visibleSegments(kpts, rect, 0.5), [[30, 80, 50, 80, COLORS.trunk]]);
+  assert.deepEqual(visiblePoints(kpts, rect, 0.5), [[30, 80, COLORS.leftArm], [50, 80, COLORS.rightArm]]);
+});
+
+test("점 색: 얼굴·좌우 팔·좌우 다리 (COCO 홀수 = 왼쪽)", () => {
+  for (const i of [0, 1, 2, 3, 4]) assert.equal(pointColor(i), COLORS.face, `점 ${i}`);
+  for (const i of [5, 7, 9]) assert.equal(pointColor(i), COLORS.leftArm, `점 ${i}`);
+  for (const i of [6, 8, 10]) assert.equal(pointColor(i), COLORS.rightArm, `점 ${i}`);
+  for (const i of [11, 13, 15]) assert.equal(pointColor(i), COLORS.leftLeg, `점 ${i}`);
+  for (const i of [12, 14, 16]) assert.equal(pointColor(i), COLORS.rightLeg, `점 ${i}`);
+});
+
+test("선 색: 몸통 4개는 노랑, 얼굴·귀-어깨는 분홍, 팔다리는 좌우 색", () => {
+  for (const [a, b] of [[5, 6], [11, 12], [5, 11], [6, 12]]) assert.equal(segmentColor(a, b), COLORS.trunk);
+  for (const [a, b] of [[1, 2], [0, 1], [0, 2], [1, 3], [2, 4], [3, 5], [4, 6]]) {
+    assert.equal(segmentColor(a, b), COLORS.face, `${a}-${b}`);
+  }
+  assert.equal(segmentColor(5, 7), COLORS.leftArm);
+  assert.equal(segmentColor(7, 9), COLORS.leftArm);
+  assert.equal(segmentColor(6, 8), COLORS.rightArm);
+  assert.equal(segmentColor(8, 10), COLORS.rightArm);
+  assert.equal(segmentColor(15, 13), COLORS.leftLeg);
+  assert.equal(segmentColor(13, 11), COLORS.leftLeg);
+  assert.equal(segmentColor(16, 14), COLORS.rightLeg);
+  assert.equal(segmentColor(14, 12), COLORS.rightLeg);
+});
+
+test("모든 뼈대 선에 색이 있고, 좌우 색은 서로 구분된다", () => {
+  const palette = new Set(Object.values(COLORS));
+  assert.equal(palette.size, 6);
+  for (const [a, b] of SKELETON) assert.ok(palette.has(segmentColor(a, b)), `${a}-${b}`);
 });
 
 test("ema", () => {

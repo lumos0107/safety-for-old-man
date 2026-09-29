@@ -70,22 +70,54 @@ export const SKELETON = [
   [7, 9], [8, 10], [1, 2], [0, 1], [0, 2], [1, 3], [2, 4], [3, 5], [4, 6],
 ];
 
+// 부위별 색. 좌우는 사람 기준 (COCO에서 홀수 번호 = 왼쪽). 왼쪽은 파랑 계열, 오른쪽은 주황 계열.
+export const COLORS = {
+  face: "#f472b6",
+  trunk: "#facc15",
+  leftArm: "#38bdf8",
+  leftLeg: "#2563eb",
+  rightArm: "#fb923c",
+  rightLeg: "#ea580c",
+};
+
+const TRUNK_EDGES = new Set(["5-6", "11-12", "5-11", "6-12"]);
+
+export function pointColor(i) {
+  if (i <= 4) return COLORS.face;
+  const left = i % 2 === 1;
+  if (i <= 10) return left ? COLORS.leftArm : COLORS.rightArm;
+  return left ? COLORS.leftLeg : COLORS.rightLeg;
+}
+
+export function segmentColor(a, b) {
+  const [lo, hi] = a < b ? [a, b] : [b, a];
+  if (lo <= 4) return COLORS.face; // 얼굴 선과 귀-어깨 선
+  if (TRUNK_EDGES.has(`${lo}-${hi}`)) return COLORS.trunk;
+  return pointColor(hi); // 팔·다리 선은 먼 쪽 관절의 색
+}
+
 export function toCanvas([nx, ny], rect) {
   return [rect.x + nx * rect.w, rect.y + ny * rect.h];
 }
 
+// [x1, y1, x2, y2, 색]
 export function visibleSegments(kpts, rect, minConf) {
   const out = [];
   for (const [a, b] of SKELETON) {
     if (kpts[a][2] >= minConf && kpts[b][2] >= minConf) {
-      out.push([...toCanvas(kpts[a], rect), ...toCanvas(kpts[b], rect)]);
+      out.push([...toCanvas(kpts[a], rect), ...toCanvas(kpts[b], rect), segmentColor(a, b)]);
     }
   }
   return out;
 }
 
+// [x, y, 색]
 export function visiblePoints(kpts, rect, minConf) {
-  return kpts.filter((k) => k[2] >= minConf).map((k) => toCanvas(k, rect));
+  const out = [];
+  kpts.forEach((k, i) => {
+    if (k[2] >= minConf) out.push([...toCanvas(k, rect), pointColor(i)]);
+  });
+  return out;
 }
 
 export function ema(prev, sample, alpha = 0.2) {

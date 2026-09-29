@@ -28,6 +28,12 @@ body {
 .stage.sync video { visibility: hidden; }      /* 동기 표시: 보낸 프레임을 캔버스에 그린다 */
 .notice { margin: 8px 12px 0; min-height: 1.4em; color: var(--wait); }
 .notice:empty { display: none; }
+.legend { margin: 8px 12px 0; color: var(--muted); font-size: 13px; }
+.legend b { font-weight: 700; }
+.lg-left { color: #38bdf8; }   /* lib.js COLORS와 같은 값 */
+.lg-right { color: #fb923c; }
+.lg-trunk { color: #facc15; }
+.lg-face { color: #f472b6; }
 .hint { margin: 6px 12px; color: var(--muted); font-size: 13px; }
 .controls {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;

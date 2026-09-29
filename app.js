@@ -83,22 +83,26 @@ function draw() {
   if (state.mode === "sync") ctx.drawImage(shown, rect.x, rect.y, rect.w, rect.h);
   for (const p of r.people) {
     const [x1, y1, x2, y2] = p.box;
-    ctx.strokeStyle = "#38bdf8";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)"; // 좌우 색과 겹치지 않게 박스는 흰색
+    ctx.lineWidth = 1.5;
     ctx.strokeRect(rect.x + x1 * rect.w, rect.y + y1 * rect.h, (x2 - x1) * rect.w, (y2 - y1) * rect.h);
-    ctx.strokeStyle = "#facc15";
-    ctx.lineWidth = 3;
-    for (const [ax, ay, bx, by] of visibleSegments(p.kpts, rect, KPT_MIN_CONF)) {
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = "round";
+    for (const [ax, ay, bx, by, color] of visibleSegments(p.kpts, rect, KPT_MIN_CONF)) {
+      ctx.strokeStyle = color;
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
       ctx.stroke();
     }
-    ctx.fillStyle = "#f43f5e";
-    for (const [x, y] of visiblePoints(p.kpts, rect, KPT_MIN_CONF)) {
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "#ffffff"; // 어두운 배경에서도 보이게 흰 테두리
+    for (const [x, y, color] of visiblePoints(p.kpts, rect, KPT_MIN_CONF)) {
+      ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.stroke();
     }
   }
 }
