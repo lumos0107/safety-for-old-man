@@ -13,5 +13,5 @@ python-dotenv
 websockets>=13
 # 테스트·검증
 pytest
-httpx
+httpx2
 playwright
