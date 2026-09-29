@@ -24,12 +24,49 @@ CLOSE_AUTH_TIMEOUT = 4008
 CLOSE_EVICTED = 4009
 CLOSE_REPLACED = 4010
 MAX_TEXT = 256  # 인증·frame 메시지는 60자 안팎 — 그보다 훨씬 긴 텍스트는 파싱하지 않는다 (깊은 중첩 JSON 방지)
-FAIL_SUMMARY_SEC = 60  # 인증 실패는 스캐너가 콘솔을 도배하지 않게 1분에 한 줄로 모은다
+FAIL_SUMMARY_SEC = 60  # 인증 실패·주소 거부는 스캐너가 콘솔을 도배하지 않게 1분 단위로 모은다
 
 
 def _note(message: str) -> None:
     """서버 창에 시각과 함께 한 줄. 토큰·이미지·IP는 절대 넣지 않는다."""
     log.warning("%s %s", time.strftime("%H:%M:%S"), message)
+
+
+def _printable(text: str, limit: int = 80) -> str:
+    """상대가 보낸 문자열을 로그에 넣을 때: 길이 제한 + 비ASCII·제어문자 이스케이프."""
+    return text[:limit].encode("ascii", "backslashreplace").decode("ascii")
+
+
+class _Summarizer:
+    """같은 종류의 사건을 모아 찍는다: 첫 건은 바로, 이어지는 건은 창(FAIL_SUMMARY_SEC)이 닫힐 때 한 줄.
+    폭주가 이어지면 창을 다시 열어 창마다 한 줄, 조용해지면 멈춘다 (다음 사건을 기다리지 않고 제때 찍음)."""
+
+    def __init__(self, first, more):
+        self.first, self.more = first, more  # detail → 문구, (건수, 시작 시각, 최근 detail) → 문구
+        self.count, self.since, self.last, self.handle = 0, "", "", None
+
+    def hit(self, detail: str) -> None:
+        if self.handle is None:
+            _note(self.first(detail))
+            self._open()
+        else:
+            self.count += 1
+            self.last = detail
+
+    def _open(self) -> None:
+        self.count, self.since = 0, time.strftime("%H:%M:%S")
+        self.handle = asyncio.get_running_loop().call_later(FAIL_SUMMARY_SEC, self._flush)
+
+    def _flush(self) -> None:
+        self.handle = None
+        if self.count:
+            _note(self.more(self.count, self.since, self.last))
+            self._open()  # 폭주가 이어질 수 있으니 한 창 더 모은다
+
+    def cancel(self) -> None:
+        if self.handle is not None:
+            self.handle.cancel()
+            self.handle = None
 
 
 async def _close(ws: WebSocket, code: int) -> None:
@@ -68,19 +105,23 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pose")
     registry = Registry(settings.max_pending)
     token = settings.token.encode()
-    failures = {"count": 0, "last": float("-inf")}
-
-    def note_failure(reason: str) -> None:
-        failures["count"] += 1
-        now = time.monotonic()
-        if now - failures["last"] >= FAIL_SUMMARY_SEC:
-            _note(f"인증 실패 {failures['count']}건 (최근: {reason}) — 계속 늘면 토큰 유출·스캔을 의심하고 gen_token --force")
-            failures["count"], failures["last"] = 0, now
+    # 틀린 토큰은 상대가 토큰을 모른다는 뜻이다 — 유출 신호가 아니다 (README '서버 창 로그 읽는 법')
+    auth_failures = _Summarizer(
+        lambda why: f"인증 실패 ({why}) — 옛 토큰이나 스캐너, 토큰은 안전",
+        lambda n, since, why: f"{since}부터 인증 실패 {n}건 더 (최근: {why}) — 토큰은 안전",
+    )
+    origin_refusals = _Summarizer(
+        lambda o: f"허용되지 않은 주소에서 접속 거부: {o} (server/.env의 ALLOWED_ORIGINS 확인)",
+        lambda n, since, o: f"{since}부터 허용되지 않은 주소 거부 {n}건 더 (최근: {o})",
+    )
+    note_failure = auth_failures.hit
 
     @asynccontextmanager
     async def lifespan(app):
         _note("서버 준비 완료 — 폰에서 시작하세요 (끄려면 이 창에서 Ctrl+C)")
         yield
+        auth_failures.cancel()
+        origin_refusals.cancel()
         executor.shutdown(wait=False, cancel_futures=True)
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -158,7 +199,7 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
         await ws.accept()  # 닫기 코드를 브라우저에 전하려면 먼저 수락해야 한다
         origin = ws.headers.get("origin")
         if origin is not None and origin.rstrip("/") not in settings.allowed_origins:
-            _note(f"허용되지 않은 주소에서 접속 거부: {origin[:80]} (server/.env의 ALLOWED_ORIGINS 확인)")
+            origin_refusals.hit(_printable(origin))
             await _close(ws, CLOSE_BAD_ORIGIN)
             return
         for old in registry.add_pending(ws):
@@ -173,7 +214,7 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
                 await _close(ws, CLOSE_EVICTED)
                 return
             if previous is not None:
-                _note("인증 성공 — 이전 연결 대체 (이전 기기에는 '다른 기기에서 사용 중')")
+                _note("인증 성공 — 이전 연결 대체 (같은 기기의 재접속이면 정상 / 다른 기기라면 그 기기에 '다른 기기에서 사용 중'이 뜸)")
                 await _close(previous, CLOSE_REPLACED)
             else:
                 _note("인증 성공 — 기기 연결됨")
