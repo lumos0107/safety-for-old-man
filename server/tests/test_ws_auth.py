@@ -83,3 +83,35 @@ def test_third_connection_replaces_second_after_first_cleanup(make_client):
         with authed(client):
             assert closed_with(b) == 4010
         b_ctx.__exit__(None, None, None)
+
+
+@pytest.mark.parametrize("raw", [
+    "[" * 20000,                                   # 깊게 중첩된 JSON (RecursionError)
+    '{"type": "auth", "token": "\ud800"}',        # 짝 없는 서로게이트 (UnicodeEncodeError)
+    '{"type": "auth", "token": "' + "x" * 5000 + '"}',  # 지나치게 긴 인증 메시지
+], ids=["deep_nesting", "lone_surrogate", "too_long"])
+def test_malformed_auth_closed_4001_without_traceback(make_client, raw, caplog):
+    with make_client() as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(raw)
+        assert closed_with(ws) == 4001
+
+
+def test_auth_events_are_logged_without_token(make_client, caplog):
+    caplog.set_level("WARNING", logger="pose")
+    with make_client() as client:
+        with authed(client):
+            with authed(client):
+                pass
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "auth", "token": "wrong"})
+            assert closed_with(ws) == 4001
+    text = caplog.text
+    assert "인증 성공" in text and "이전 연결 대체" in text and "인증 실패" in text
+    assert TOKEN not in text and "wrong" not in text
+
+
+def test_ready_message_logged_on_startup(make_client, caplog):
+    caplog.set_level("WARNING", logger="pose")
+    with make_client():
+        pass
+    assert "서버 준비 완료" in caplog.text

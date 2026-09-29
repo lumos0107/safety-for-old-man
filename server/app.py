@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Callable
@@ -22,6 +23,13 @@ CLOSE_BAD_ORIGIN = 4003
 CLOSE_AUTH_TIMEOUT = 4008
 CLOSE_EVICTED = 4009
 CLOSE_REPLACED = 4010
+MAX_TEXT = 256  # 인증·frame 메시지는 60자 안팎 — 그보다 훨씬 긴 텍스트는 파싱하지 않는다 (깊은 중첩 JSON 방지)
+FAIL_SUMMARY_SEC = 60  # 인증 실패는 스캐너가 콘솔을 도배하지 않게 1분에 한 줄로 모은다
+
+
+def _note(message: str) -> None:
+    """서버 창에 시각과 함께 한 줄. 토큰·이미지·IP는 절대 넣지 않는다."""
+    log.warning("%s %s", time.strftime("%H:%M:%S"), message)
 
 
 async def _close(ws: WebSocket, code: int) -> None:
@@ -41,9 +49,11 @@ async def _send(ws: WebSocket, payload: dict) -> bool:
 
 def _frame_seq(text: str) -> int | None:
     """{"type":"frame","seq":N}이면 N(0 이상 정수), 아니면 None."""
+    if len(text) > MAX_TEXT:
+        return None
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if not isinstance(data, dict) or data.get("type") != "frame":
         return None
@@ -58,9 +68,18 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pose")
     registry = Registry(settings.max_pending)
     token = settings.token.encode()
+    failures = {"count": 0, "last": float("-inf")}
+
+    def note_failure(reason: str) -> None:
+        failures["count"] += 1
+        now = time.monotonic()
+        if now - failures["last"] >= FAIL_SUMMARY_SEC:
+            _note(f"인증 실패 {failures['count']}건 (최근: {reason}) — 계속 늘면 토큰 유출·스캔을 의심하고 gen_token --force")
+            failures["count"], failures["last"] = 0, now
 
     @asynccontextmanager
     async def lifespan(app):
+        _note("서버 준비 완료 — 폰에서 시작하세요 (끄려면 이 창에서 Ctrl+C)")
         yield
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -73,16 +92,23 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
         try:
             msg = await asyncio.wait_for(ws.receive(), timeout=settings.auth_timeout)
         except asyncio.TimeoutError:
+            note_failure("시간 초과")
             await _close(ws, CLOSE_AUTH_TIMEOUT)
             return False
         if msg["type"] == "websocket.disconnect":
             return False
-        try:
-            data = json.loads(msg.get("text") or "")
-        except ValueError:
-            data = None
-        given = data.get("token") if isinstance(data, dict) and data.get("type") == "auth" else None
-        if not isinstance(given, str) or not secrets.compare_digest(given.encode(), token):
+        text = msg.get("text") or ""
+        ok = False
+        if len(text) <= MAX_TEXT:
+            try:
+                data = json.loads(text)
+                given = data.get("token") if isinstance(data, dict) and data.get("type") == "auth" else None
+                # 짝 없는 서로게이트 같은 문자는 encode에서 UnicodeEncodeError(ValueError) — 틀린 토큰으로 본다
+                ok = isinstance(given, str) and secrets.compare_digest(given.encode("utf-8"), token)
+            except (ValueError, RecursionError):
+                ok = False
+        if not ok:
+            note_failure("틀린 토큰")
             await _close(ws, CLOSE_BAD_TOKEN)
             return False
         return True
@@ -132,6 +158,7 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
         await ws.accept()  # 닫기 코드를 브라우저에 전하려면 먼저 수락해야 한다
         origin = ws.headers.get("origin")
         if origin is not None and origin.rstrip("/") not in settings.allowed_origins:
+            _note(f"허용되지 않은 주소에서 접속 거부: {origin[:80]} (server/.env의 ALLOWED_ORIGINS 확인)")
             await _close(ws, CLOSE_BAD_ORIGIN)
             return
         for old in registry.add_pending(ws):
@@ -146,7 +173,10 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
                 await _close(ws, CLOSE_EVICTED)
                 return
             if previous is not None:
+                _note("인증 성공 — 이전 연결 대체 (이전 기기에는 '다른 기기에서 사용 중')")
                 await _close(previous, CLOSE_REPLACED)
+            else:
+                _note("인증 성공 — 기기 연결됨")
             if await _send(ws, {"type": "ready", "model": settings.model_name}):
                 await serve_frames(ws)
         finally:

@@ -4,6 +4,11 @@ ultralytics 모델은 스레드 안전하지 않다. 호출은 app.py의 단일 
 """
 import numpy as np
 from ultralytics import YOLO
+from ultralytics.utils.events import events
+
+# Ultralytics는 추론 통계(PC 식별자·GPU 이름·처리 장수 등)를 Google Analytics로 보낸다.
+# 화면 쪽 MediaPipe 통계를 CSP로 막은 것과 같은 원칙으로, 이 서버 프로세스에서는 끈다 (전역 설정은 건드리지 않음).
+events.enabled = False
 
 
 def _unit(v: float) -> float:

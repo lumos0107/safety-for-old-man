@@ -119,3 +119,10 @@ def test_health_and_no_docs(make_client):
         assert client.get("/health").json() == {"ok": True}
         for path in ("/docs", "/redoc", "/openapi.json"):
             assert client.get(path).status_code == 404
+
+
+def test_deeply_nested_frame_text_is_bad_message(make_client):
+    with make_client() as client, authed(client) as ws:
+        ws.send_text("[" * 20000)
+        assert ws.receive_json() == BAD_MESSAGE
+        assert send_frame(ws, 3)["seq"] == 3
