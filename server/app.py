@@ -153,3 +153,11 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
             registry.discard(ws)
 
     return app
+
+
+def build_app() -> FastAPI:
+    """uvicorn --factory server.app:build_app 진입점. 실제 모델을 올린다."""
+    from .pose import PoseModel  # 단위 테스트가 GPU 모델을 불러오지 않도록 여기서 가져온다
+
+    settings = load_settings()
+    return create_app(settings, PoseModel(settings.model).predict)
