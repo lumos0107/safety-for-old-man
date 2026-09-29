@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src wss: ws://localhost:* ws://127.0.0.1:*; img-src 'self' blob:; media-src 'self' blob:">
+  <title>눈길손길 자세 인식 시제품</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <span id="status" data-kind="wait">대기</span>
+    <span class="stat">fps <b id="fps">-</b></span>
+    <span class="stat">처리 <b id="ms">-</b>ms</span>
+    <span class="stat">인원 <b id="people">-</b></span>
+  </header>
+
+  <main id="stage" class="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+  </main>
+
+  <p id="notice" class="notice" role="status"></p>
+  <p class="hint">실시간 표시에서는 뼈대가 조금 늦게 따라옵니다. 정확히 겹쳐 보려면 표시 방식을 '동기'로 바꾸세요. 영상은 저장되지 않습니다.</p>
+
+  <footer class="controls">
+    <button id="start" class="primary">시작</button>
+    <button id="flip">카메라 전환</button>
+    <button id="mode">표시: 실시간</button>
+    <button id="settings-btn">설정</button>
+  </footer>
+
+  <dialog id="settings">
+    <form id="settings-form" method="dialog">
+      <h2>서버 설정</h2>
+      <label>서버 주소
+        <input id="server-url" type="text" inputmode="url" autocomplete="off" spellcheck="false"
+               placeholder="https://&lt;pc이름&gt;.&lt;tailnet&gt;.ts.net">
+      </label>
+      <label>토큰
+        <input id="token" type="password" autocomplete="off" spellcheck="false">
+      </label>
+      <p class="small">이 브라우저에만 저장됩니다.</p>
+      <p id="settings-error" class="error"></p>
+      <menu>
+        <button value="cancel" formnovalidate>취소</button>
+        <button value="save" class="primary">저장</button>
+      </menu>
+    </form>
+  </dialog>
+</body>
+</html>
