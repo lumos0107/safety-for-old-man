@@ -26,6 +26,7 @@
 - 토큰은 `secrets.token_urlsafe(32)`(43자) 이상, 32자 미만이면 서버가 시작을 거부한다. 토큰·서버 주소는 저장소에 넣지 않는다. 프런트는 `localStorage`에만 저장한다.
 - `ALLOWED_ORIGINS` 기본값은 `https://lumos0107.github.io` 하나. `http://localhost:5500`은 `.env.example`과 검증 도구에만 쓴다.
 - FastAPI 문서 경로는 끈다 (`docs_url=None, redoc_url=None, openapi_url=None`). `/health`는 `{"ok": true}`만.
+- 프런트 `localStorage` 키는 `pose.serverUrl`, `pose.token`. 서버 주소는 `https`/`wss`만, `http`/`ws`는 `localhost`·`127.0.0.1`·`[::1]`만 허용.
 - 화면 상태 문구는 정확히: `설정 필요` `연결 중` `연결됨` `토큰 확인` `허용되지 않은 주소` `다른 기기에서 사용 중` `서버 꺼짐` (그 밖에 `대기`, `정지`).
 - 프런트는 프레임워크·빌드 없이 `index.html`·`style.css`·`app.js`·`lib.js`.
 - 커밋 메시지 끝에 `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`. `git push`는 Task 11에서만 한다.
@@ -59,10 +60,15 @@
 #   uv venv --python 3.12 .venv
 #   uv pip install --python .venv torch torchvision --index-url https://download.pytorch.org/whl/cu128
 #   uv pip install --python .venv -r server/requirements.txt
-ultralytics
+# 정확한 버전은 server/requirements.lock.txt (uv pip freeze 결과)
+ultralytics~=8.4.0
+opencv-python
+pillow
+numpy
 fastapi
 uvicorn[standard]
 python-dotenv
+websockets>=13
 # 테스트·검증
 pytest
 httpx
@@ -71,6 +77,9 @@ playwright
 
 Run: `uv pip install --python .venv -r server/requirements.txt`
 Expected: 설치 완료. 이어서 `.venv\Scripts\python -c "import fastapi, uvicorn, dotenv, websockets, playwright; print(websockets.__version__)"` 가 13 이상 버전을 출력.
+
+Run: `uv pip freeze --python .venv > server/requirements.lock.txt`
+Expected: `torch==2.11.0+cu128`, `ultralytics==8.4.x` 등이 담긴 잠금 파일 (팀원이 같은 버전을 재현할 때 쓴다).
 
 - [ ] **Step 2: 패키지 뼈대와 pytest 설정**
 
@@ -167,7 +176,8 @@ def test_gen_token_writes_env_and_refuses_overwrite(tmp_path):
     again = run_gen("--env", str(env))
     assert again.returncode != 0
     assert run_gen("--env", str(env), "--force").returncode == 0
-    assert env.read_text(encoding="utf-8") != f"TOKEN={lines['TOKEN']}\n"
+    new = dict(line.split("=", 1) for line in env.read_text(encoding="utf-8").splitlines())
+    assert new["TOKEN"] != lines["TOKEN"]  # --force는 토큰을 실제로 교체한다
 ```
 
 - [ ] **Step 4: 실패 확인**
@@ -275,7 +285,7 @@ Expected: 9 passed
 - [ ] **Step 7: 커밋**
 
 ```bash
-git add pytest.ini server/__init__.py server/tests/__init__.py server/config.py server/requirements.txt server/.env.example server/tests/test_config.py tools/gen_token.py tools/webcam_pose.py
+git add pytest.ini server/__init__.py server/tests/__init__.py server/config.py server/requirements.txt server/requirements.lock.txt server/.env.example server/tests/test_config.py tools/gen_token.py tools/webcam_pose.py
 git commit -m "서버 기반: 설정 로딩, 토큰 생성, 의존성
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
@@ -538,9 +548,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Test: `server/tests/test_sessions.py`
 
 **Interfaces:**
-- Produces: `server.sessions.Registry(max_pending: int)` —
+- Produces: `server.sessions.NotPending(Exception)`, `server.sessions.Registry(max_pending: int)` —
   `add_pending(conn) -> list` (넘친 만큼 가장 오래된 대기 연결을 빼서 돌려줌),
-  `promote(conn) -> object | None` (대기에서 빼고 활성으로, 이전 활성 연결을 돌려줌),
+  `promote(conn) -> object | None` (대기에서 빼고 활성으로, 이전 활성 연결을 돌려줌. **대기 목록에 없는 연결(밀려났거나 이미 활성)이면 아무것도 바꾸지 않고 `NotPending`**),
   `discard(conn) -> None` (그 연결이 가진 기록만 지움 — 다른 연결이 활성이면 건드리지 않음),
   속성 `active`, `pending`(deque)
 
@@ -548,7 +558,9 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 `server/tests/test_sessions.py`:
 ```python
-from server.sessions import Registry
+import pytest
+
+from server.sessions import NotPending, Registry
 
 
 def test_pending_overflow_evicts_oldest():
@@ -568,11 +580,25 @@ def test_promote_returns_previous_active():
     assert reg.active == "b" and list(reg.pending) == []
 
 
-def test_promote_same_conn_twice_returns_none():
+def test_evicted_conn_cannot_become_active():
+    # 밀려난 연결의 버퍼에 남은 인증 메시지가 나중에 처리돼도 정상 활성 연결을 빼앗지 못한다
+    reg = Registry(max_pending=1)
+    reg.add_pending("live")
+    reg.promote("live")
+    reg.add_pending("a")
+    assert reg.add_pending("b") == ["a"]
+    with pytest.raises(NotPending):
+        reg.promote("a")
+    assert reg.active == "live"
+
+
+def test_promote_twice_is_refused():
     reg = Registry(max_pending=4)
     reg.add_pending("a")
     reg.promote("a")
-    assert reg.promote("a") is None
+    with pytest.raises(NotPending):
+        reg.promote("a")
+    assert reg.active == "a"
 
 
 def test_discard_of_replaced_conn_keeps_new_active():
@@ -611,6 +637,10 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'server.sessions'`
 from collections import deque
 
 
+class NotPending(Exception):
+    """대기 목록에 없는 연결(이미 밀려났거나 이미 활성)을 활성으로 올리려 함."""
+
+
 class Registry:
     def __init__(self, max_pending: int):
         self.max_pending = max_pending
@@ -625,9 +655,10 @@ class Registry:
         return evicted
 
     def promote(self, conn):
-        if conn in self.pending:
-            self.pending.remove(conn)
-        previous = self.active if self.active is not conn else None
+        if conn not in self.pending:
+            raise NotPending
+        self.pending.remove(conn)
+        previous = self.active
         self.active = conn
         return previous
 
@@ -641,13 +672,13 @@ class Registry:
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv\Scripts\python -m pytest server/tests/test_sessions.py -v`
-Expected: 5 passed
+Expected: 6 passed
 
 - [ ] **Step 5: 커밋**
 
 ```bash
 git add server/sessions.py server/tests/test_sessions.py
-git commit -m "연결 관리: 대기 연결 밀어내기, 인증 연결 대체
+git commit -m "연결 관리: 대기 연결 밀어내기, 인증 연결 대체, 밀려난 연결 승격 거부
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -661,7 +692,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Test: `server/tests/test_ws_auth.py`
 
 **Interfaces:**
-- Consumes: `Settings` (Task 1), `decode_jpeg`·`BadImage` (Task 2), `Registry` (Task 4)
+- Consumes: `Settings` (Task 1), `decode_jpeg`·`BadImage` (Task 2), `Registry`·`NotPending` (Task 4)
 - Produces: `server.app.create_app(settings: Settings, predictor: Predictor) -> FastAPI`, `server.app.Predictor = Callable[[np.ndarray], dict]` (Task 3 `PoseModel.predict` 형식), 종료 코드 상수 `CLOSE_BAD_TOKEN=4001`, `CLOSE_BAD_ORIGIN=4003`, `CLOSE_AUTH_TIMEOUT=4008`, `CLOSE_EVICTED=4009`, `CLOSE_REPLACED=4010`
 - Produces (테스트 픽스처): `make_client(predictor=fake_predictor, **settings_overrides) -> TestClient`, 도우미 `authed(client, **kw)` 컨텍스트 매니저, 상수 `TOKEN`, `ORIGIN`, 함수 `fake_predictor(img) -> dict`
 
@@ -803,6 +834,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'server.app'`
 """WebSocket 자세 인식 백엔드. 설계: design/2026-09-29-web-pose-design.md 4~6장."""
 import asyncio
 import json
+import logging
 import secrets
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -813,9 +845,10 @@ from fastapi import FastAPI, WebSocket
 
 from .config import Settings, load_settings
 from .imaging import BadImage, decode_jpeg
-from .sessions import Registry
+from .sessions import NotPending, Registry
 
 Predictor = Callable[[np.ndarray], dict]
+log = logging.getLogger("pose")
 
 CLOSE_BAD_TOKEN = 4001
 CLOSE_BAD_ORIGIN = 4003
@@ -892,7 +925,12 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
         try:
             if not await authenticate(ws):
                 return
-            previous = registry.promote(ws)
+            try:
+                previous = registry.promote(ws)
+            except NotPending:
+                # 이미 4009로 밀려난 연결이 버퍼에 남은 인증 메시지로 통과한 경우: 활성 연결을 건드리지 않는다
+                await _close(ws, CLOSE_EVICTED)
+                return
             if previous is not None:
                 await _close(previous, CLOSE_REPLACED)
             if await _send(ws, {"type": "ready", "model": settings.model_name}):
@@ -927,7 +965,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `create_app`, 픽스처 `make_client`·`authed` (Task 5), `jpeg_bytes`·`jpeg_with_fake_size` (Task 2)
-- Produces: 설계 5장 메시지 규격 — 응답 `{"type":"result","seq","img_w","img_h","infer_ms","people"}` / `{"type":"error","code":"too_large"|"bad_image","seq"}` / `{"type":"error","code":"bad_message"}`
+- Produces: 설계 5장 메시지 규격 — 응답 `{"type":"result","seq","img_w","img_h","infer_ms","people"}` / `{"type":"error","code":"too_large"|"bad_image"|"server_error","seq"}` / `{"type":"error","code":"bad_message"}`
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -1035,6 +1073,20 @@ def test_model_calls_never_overlap_during_replacement(make_client):
     assert calls["max"] == 1
 
 
+def test_predictor_exception_is_server_error_and_keeps_connection(make_client):
+    calls = {"n": 0}
+
+    def flaky(img):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("CUDA out of memory")
+        return fake_predictor(img)
+
+    with make_client(predictor=flaky) as client, authed(client) as ws:
+        assert send_frame(ws, 1) == {"type": "error", "code": "server_error", "seq": 1}
+        assert send_frame(ws, 2)["type"] == "result"
+
+
 def test_health_and_no_docs(make_client):
     with make_client() as client:
         assert client.get("/health").json() == {"ok": True}
@@ -1045,7 +1097,9 @@ def test_health_and_no_docs(make_client):
 - [ ] **Step 2: 실패 확인**
 
 Run: `.venv\Scripts\python -m pytest server/tests/test_ws_frames.py -v`
-Expected: `test_health_and_no_docs`만 PASS (Task 5에서 구현), 나머지는 FAIL — Task 5의 임시 `serve_frames`가 모든 메시지에 `bad_message`로 답하므로 `result`·`too_large`·`bad_image` 기대값과 어긋난다.
+Expected: 3개 PASS, 나머지 FAIL.
+- PASS: `test_health_and_no_docs`(Task 5에서 구현), `test_binary_without_frame_is_bad_message`, `test_bad_message_discards_pending_frame` — 임시 `serve_frames`가 모든 메시지에 `bad_message`로 답해 우연히 기대값과 같다.
+- FAIL: 나머지 — `result`·`too_large`·`bad_image`·`server_error` 대신 `bad_message`가 온다.
 
 - [ ] **Step 3: 구현**
 
@@ -1103,6 +1157,9 @@ def _frame_seq(text: str) -> int | None:
                     reply = {"type": "result", "seq": seq, **result}
                 except BadImage:
                     reply = {"type": "error", "code": "bad_image", "seq": seq}
+                except Exception as exc:  # GPU 메모리 부족 등. 연결은 유지한다
+                    log.warning("추론 실패: %s", type(exc).__name__)  # 예외 종류만, 이미지·메시지 없이
+                    reply = {"type": "error", "code": "server_error", "seq": seq}
             if not await _send(ws, reply):
                 return
 ```
@@ -1110,13 +1167,13 @@ def _frame_seq(text: str) -> int | None:
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv\Scripts\python -m pytest server/tests -v --ignore=server/tests/test_pose.py`
-Expected: 모두 PASS (test_ws_frames 17개 포함)
+Expected: 모두 PASS (test_ws_frames 18개 포함)
 
 - [ ] **Step 5: 커밋**
 
 ```bash
 git add server/app.py server/tests/test_ws_frames.py
-git commit -m "프레임 처리: seq, too_large·bad_image·bad_message, 추론 단일 실행기
+git commit -m "프레임 처리: seq, too_large·bad_image·bad_message·server_error, 추론 단일 실행기
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1221,8 +1278,9 @@ def test_bus_end_to_end(server):
 def test_over_ws_max_size_disconnects(server):
     with authed(server) as ws:
         ws.send(json.dumps({"type": "frame", "seq": 1}))
-        ws.send(b"\xff" * 2_200_000)
-        with pytest.raises(ConnectionClosed):
+        # 서버는 헤더만 보고 바로 닫으므로 send에서 먼저 끊김(Windows는 RST)이 날 수 있다
+        with pytest.raises((ConnectionClosed, OSError)):
+            ws.send(b"\xff" * 2_200_000)
             ws.recv(timeout=10)
 ```
 
@@ -1257,10 +1315,10 @@ if (-not (Test-Path (Join-Path $PSScriptRoot ".env"))) {
 }
 Set-Location $Root
 
-& $Ts funnel --bg 8000 | Out-Null   # 이미 켜져 있으면 같은 설정으로 다시 적용된다
+# 출력을 숨기지 않는다: Funnel·HTTPS가 아직 허용되지 않았으면 허용 링크를 출력하고 기다린다.
+# 이미 켜져 있으면 같은 설정으로 다시 적용된다.
+& $Ts funnel --bg 8000
 if ($LASTEXITCODE -ne 0) { throw "Funnel을 켜지 못했습니다. 'tailscale funnel status'를 확인하세요." }
-Write-Host "Funnel 켜짐:"
-& $Ts funnel status
 
 try {
     & $Py -m uvicorn --factory server.app:build_app --host 127.0.0.1 --port 8000 `
@@ -1403,7 +1461,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `STATUS = {IDLE:"대기", STOPPED:"정지", NEED_SETUP:"설정 필요", CONNECTING:"연결 중", CONNECTED:"연결됨", BAD_TOKEN:"토큰 확인", BAD_ORIGIN:"허용되지 않은 주소", REPLACED:"다른 기기에서 사용 중", OFFLINE:"서버 꺼짐"}`
   - `closePolicy(code: number) -> {retry: boolean, status: string}`
   - `retryDelayMs(attempt: number) -> number` (3000, 6000, 10000, 10000, …)
-  - `normalizeServerUrl(input: string) -> string | null`
+  - `normalizeServerUrl(input: string) -> string | null` (`ws:`는 `localhost`·`127.0.0.1`·`[::1]`만, 나머지 평문 주소는 `null`)
   - `cleanToken(input: string) -> string`
   - `fitContain(srcW, srcH, boxW, boxH) -> {x, y, w, h} | null`
   - `scaleToLongSide(w, h, maxSide = 640) -> {w, h}` (확대하지 않음)
@@ -1457,9 +1515,12 @@ test("서버 주소 정규화", () => {
     ["  wss://h.ts.net/ws  ", "wss://h.ts.net/ws"],
     ["http://127.0.0.1:8000", "ws://127.0.0.1:8000/ws"],
     ["ws://localhost:8000/ws", "ws://localhost:8000/ws"],
+    ["http://[::1]:8000", "ws://[::1]:8000/ws"],
   ];
   for (const [input, want] of cases) assert.equal(normalizeServerUrl(input), want, input);
-  for (const bad of ["", "   ", "ftp://x.com", "http://", null, undefined]) {
+  const bads = ["", "   ", "ftp://x.com", "http://", null, undefined,
+    "http://mypc.tailnet.ts.net", "ws://example.com/ws", "http://192.168.0.10:8000"]; // 원격 평문 거부
+  for (const bad of bads) {
     assert.equal(normalizeServerUrl(bad), null, String(bad));
   }
 });
@@ -1547,7 +1608,10 @@ export function retryDelayMs(attempt) {
   return Math.min(3000 * 2 ** attempt, 10000);
 }
 
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
 // 호스트만, https 주소, /ws가 붙은 주소 모두 받아 WebSocket 주소로 바꾼다.
+// 암호화되지 않은 http/ws는 이 PC 안(localhost)일 때만 허용한다 — 토큰이 평문으로 원격에 가지 않게.
 export function normalizeServerUrl(input) {
   let s = String(input ?? "").trim();
   if (!s) return null;
@@ -1560,6 +1624,7 @@ export function normalizeServerUrl(input) {
   }
   const scheme = { "https:": "wss:", "wss:": "wss:", "http:": "ws:", "ws:": "ws:" }[url.protocol];
   if (!scheme || !url.host) return null;
+  if (scheme === "ws:" && !LOCAL_HOSTS.has(url.hostname)) return null;
   return `${scheme}//${url.host}/ws`;
 }
 
@@ -1635,7 +1700,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: `lib.js` 전부 (Task 8)
 - Produces (Task 10이 쓰는 DOM): `#status`(상태 문구, `data-kind` = `ok`|`wait`|`bad`), `#fps`, `#ms`, `#people`(인원 숫자), `#notice`, `#start`(문구 `시작`/`정지`), `#flip`, `#mode`(문구 `표시: 실시간`/`표시: 동기`), `#settings-btn`, `dialog#settings` 안 `#server-url`, `#token`, `button[value=save]`, `button[value=cancel]`, `#settings-error`, `#stage`(`.mirror`, `.sync` 클래스), `video#video`, `canvas#overlay`
-- `localStorage` 키: `serverUrl`, `token`
+- `localStorage` 키: `pose.serverUrl`, `pose.token`
 
 - [ ] **Step 1: 화면 골격**
 
@@ -1648,6 +1713,8 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src wss: ws://localhost:* ws://127.0.0.1:*; img-src 'self' blob:; media-src 'self' blob:">
   <title>눈길손길 자세 인식 시제품</title>
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
@@ -1777,8 +1844,12 @@ const video = $("video");
 const stage = $("stage");
 const overlay = $("overlay");
 const ctx = overlay.getContext("2d");
-const capture = document.createElement("canvas"); // 보낸 프레임 (동기 표시에 재사용)
+const capture = document.createElement("canvas"); // 전송할 프레임
 const cctx = capture.getContext("2d");
+const shown = document.createElement("canvas");   // 마지막 결과를 만든 프레임 (동기 표시용)
+const sctx = shown.getContext("2d");
+const KEY_URL = "pose.serverUrl";
+const KEY_TOKEN = "pose.token";
 
 const state = {
   running: false, facing: "environment", mode: "live",
@@ -1791,15 +1862,15 @@ const state = {
 // ---------- 설정 (이 브라우저에만 저장) ----------
 function loadSettings() {
   try {
-    return { url: localStorage.getItem("serverUrl") || "", token: localStorage.getItem("token") || "" };
+    return { url: localStorage.getItem(KEY_URL) || "", token: localStorage.getItem(KEY_TOKEN) || "" };
   } catch {
     return { url: "", token: "" };
   }
 }
 function saveSettings(url, token) {
   try {
-    localStorage.setItem("serverUrl", url);
-    localStorage.setItem("token", token);
+    localStorage.setItem(KEY_URL, url);
+    localStorage.setItem(KEY_TOKEN, token);
   } catch {
     setNotice("브라우저 저장소를 쓸 수 없어 설정이 저장되지 않았습니다.");
   }
@@ -1838,7 +1909,7 @@ function draw() {
   const r = state.lastResult;
   const rect = fitContain(video.videoWidth, video.videoHeight, bw, bh);
   if (!r || !rect) return;
-  if (state.mode === "sync") ctx.drawImage(capture, rect.x, rect.y, rect.w, rect.h);
+  if (state.mode === "sync") ctx.drawImage(shown, rect.x, rect.y, rect.w, rect.h);
   for (const p of r.people) {
     const [x1, y1, x2, y2] = p.box;
     ctx.strokeStyle = "#38bdf8";
@@ -1890,7 +1961,9 @@ async function startCamera() {
   }
   video.srcObject = state.stream;
   await video.play().catch(() => {});
-  stage.classList.toggle("mirror", state.facing === "user");
+  // 요청한 방향이 아니라 실제로 잡힌 카메라로 판단한다. 값이 없으면(노트북 웹캠 등) 전면으로 본다.
+  const facing = state.stream.getVideoTracks()[0]?.getSettings().facingMode;
+  stage.classList.toggle("mirror", (facing || "user") === "user");
   return true;
 }
 
@@ -2043,6 +2116,11 @@ function onResult(r) {
   if (state.lastResultAt !== null) state.fps = ema(state.fps, 1000 / Math.max(1, now - state.lastResultAt));
   state.lastResultAt = now;
   state.lastResult = r;
+  // 다음 pump가 capture를 덮어쓰기 전에 이 결과의 프레임을 보관한다 (동기 표시 재그리기용)
+  shown.width = capture.width;
+  shown.height = capture.height;
+  sctx.drawImage(capture, 0, 0);
+  setNotice(""); // 앞선 프레임 오류 안내 지우기
   $("fps").textContent = state.fps == null ? "-" : state.fps.toFixed(1);
   $("ms").textContent = r.infer_ms.toFixed(1);
   $("people").textContent = String(r.people.length);
@@ -2340,7 +2418,7 @@ Expected: `OK` 6줄과 `전체 통과`. 실패하면 superpowers:systematic-debu
 - [ ] **Step 3: 스크린샷 확인**
 
 `1_live.png`, `2_sync.png`를 열어 본다.
-Expected: 세로 영상이 가운데 있고 좌우에 검은 여백. 사람 3명 이상에 박스와 노란 뼈대가 **사람 위에 정확히 겹침**. 동기 화면도 같은 위치.
+Expected: 세로 영상이 가운데 있고 좌우에 검은 여백. 사람 3명 이상에 박스와 노란 뼈대가 **사람 위에 정확히 겹침**. 동기 화면도 같은 위치. 가짜 카메라는 방향 정보가 없어 전면으로 간주되므로 영상이 좌우 반전돼 보일 수 있는데, 이때도 뼈대가 함께 반전돼 겹쳐야 한다 (반전 좌표 검증).
 
 - [ ] **Step 4: 커밋**
 
@@ -2406,8 +2484,14 @@ Expected: 모두 통과
 
 Run: `git status --short` 와 `git ls-files` 로 저장소에 올라갈 파일 확인
 Expected: `.env`, `*.pt`, `.venv`, 이미지·영상 파일이 목록에 없음.
-Run: `git grep -n -E "tail[0-9a-f]{4,}\.ts\.net"` 와 `git log --all -p | grep -c -E "tail[0-9a-f]{4,}\.ts\.net"`
-Expected: 둘 다 결과 없음(0) — 실제 Funnel 주소가 파일과 기록 어디에도 없다 (자리표시 `<pc이름>.<tailnet>.ts.net`, 테스트용 `mypc.tailnet.ts.net`만).
+실제 호스트 문자열로 검사한다 (tailnet 이름 형식에 기대지 않는다. 주소를 계획·코드에 적지 않도록 실행 시점에 읽는다). 주소는 CT 로그로 어차피 공개되므로 이 검사는 보안 수단이 아니라 저장소 정리 목적이다.
+Run (PowerShell):
+```powershell
+$h = (& "C:\Program Files\Tailscale\tailscale.exe" status --json | ConvertFrom-Json).Self.DNSName.TrimEnd('.')
+$pc = $h.Split('.')[0]; $tn = $h.Split('.')[1]
+git grep -n -e $pc -e $tn; git log --all -p | Select-String -SimpleMatch -Pattern $pc, $tn | Measure-Object | % Count
+```
+Expected: `git grep` 출력 없음, 개수 `0`.
 
 ```bash
 git add README.md
@@ -2416,15 +2500,20 @@ git commit -m "README: 실행·사용·테스트 방법
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 3: push와 Pages 확인** (첫 push 때 사용자가 GitHub 로그인)
+- [ ] **Step 3: Pages 배포 설정 확인**
+
+저장소는 public이고 Pages가 이미 켜져 있다 (2026-09-29 확인: `main` 브랜치의 "pages build and deployment" 성공, 사이트 루트 `200`). 배포 폴더가 `(root)`인지는 push 뒤 Step 4에서 `app.js`가 `200`인지로 확인한다.
+`404`이면 사용자에게 저장소 Settings → Pages → Source `Deploy from a branch`, `main` / `(root)`로 바꿔 달라고 요청한 뒤 다시 확인한다.
+
+- [ ] **Step 4: push와 Pages 확인** (첫 push 때 사용자가 GitHub 로그인)
 
 Run: `git push -u origin main`
 Expected: push 성공. 1~2분 뒤 `curl -s -o /dev/null -w "%{http_code}" https://lumos0107.github.io/safety-for-old-man/app.js` → `200`, 페이지 HTML에 `눈길손길 자세 인식 시제품`.
 
-- [ ] **Step 4: Funnel 경로 검증**
+- [ ] **Step 5: Funnel 경로 검증**
 
 Run (터미널 1): `powershell -ExecutionPolicy Bypass -File server\run.ps1`
-Expected: `Funnel 켜짐:`과 `https://<pc이름>.<tailnet>.ts.net (Funnel on)`
+Expected: `Available on the internet: https://<pc이름>.<tailnet>.ts.net/ … proxy http://127.0.0.1:8000` 뒤 서버 대기
 
 Run (터미널 2): `.venv\Scripts\python tools/stream_video.py --url wss://<실제 Funnel 주소>/ws --origin https://lumos0107.github.io --frames 100`
 Expected: `프레임 100  오류 0 …` 한 줄
@@ -2433,7 +2522,19 @@ Run: `curl -s -o /dev/null -w "%{http_code}" https://<실제 Funnel 주소>/docs
 
 터미널 1 Ctrl+C → `Funnel 꺼짐` 출력, `tailscale funnel status` → `No serve config`
 
-- [ ] **Step 5: 사용자 폰 시험** (사용자)
+- [ ] **Step 6: 사용자 폰 시험** (사용자)
 
 `run.ps1` 실행 상태에서 폰으로 Pages 접속 → 설정(서버 주소·토큰) → 시작 → 뼈대 표시, 동기 표시, 카메라 전환 확인. 와이파이를 끄고 LTE로 바꿔 `서버 꺼짐` → `연결됨`으로 돌아오는지 확인.
 ````
+
+---
+
+## 계획 검토 반영 기록 (`2026-09-29-web-pose-plan-review.md`)
+
+모든 항목을 반영했다. 다르게 반영한 것:
+
+- **2.1 밀려난 연결의 인증 경쟁**: 검토안의 app 한 줄(`ws not in registry.pending`) 대신 `Registry.promote`가 대기 목록에 없는 연결을 `NotPending`으로 거부한다. 효과는 같고, 비동기 타이밍을 재현하지 않아도 Task 4 단위 테스트로 확정적으로 검증된다. app은 이 경우 해당 연결만 `4009`로 닫는다.
+- **2.4 Pages 활성화**: 이미 `main` 브랜치에서 배포 중이라(2026-09-29 확인) 설정 단계 대신 확인 단계로 넣었다 (Task 11 Step 3).
+- **2.5 주소 유출 검사**: 실제 호스트 문자열로 검사하되, 계획·코드에 주소를 적지 않도록 실행 시점에 `tailscale status --json`에서 읽는다.
+- **3.5 CSP**: 선택 항목이지만 반영했다. Task 10 브라우저 검증이 CSP 때문에 연결이 막히지 않는지 함께 확인한다.
+- **5장 반전 판단**: 가짜 카메라는 방향 정보가 없어 전면으로 간주되므로, Task 10 스크린샷이 반전 좌표까지 검증하게 됐다.
