@@ -1,0 +1,17 @@
+# PyTorch(CUDA)는 먼저 따로 설치한다:
+#   uv venv --python 3.12 .venv
+#   uv pip install --python .venv torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   uv pip install --python .venv -r server/requirements.txt
+# 정확한 버전은 server/requirements.lock.txt (uv pip freeze 결과)
+ultralytics~=8.4.0
+opencv-python
+pillow
+numpy
+fastapi
+uvicorn[standard]
+python-dotenv
+websockets>=13
+# 테스트·검증
+pytest
+httpx
+playwright
