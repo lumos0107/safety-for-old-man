@@ -1,0 +1,19 @@
+# 가상환경·캐시
+.venv/
+__pycache__/
+.pytest_cache/
+
+# 비밀값
+.env
+
+# 모델 가중치
+*.pt
+*.onnx
+
+# 테스트 중 찍은 영상·사진 (공개 저장소)
+*.mp4
+*.avi
+*.mov
+*.jpg
+*.jpeg
+*.png
