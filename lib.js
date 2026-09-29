@@ -33,7 +33,8 @@ export function retryDelayMs(attempt) {
   return Math.min(3000 * 2 ** attempt, 10000);
 }
 
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+// [::1]은 넣지 않는다: 페이지 CSP connect-src가 IPv6 주소를 적을 수 없어 어차피 막힌다
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
 
 // 호스트만, https 주소, /ws가 붙은 주소 모두 받아 WebSocket 주소로 바꾼다.
 // 암호화되지 않은 http/ws는 이 PC 안(localhost)일 때만 허용한다 — 토큰이 평문으로 원격에 가지 않게.

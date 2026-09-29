@@ -114,6 +114,11 @@ window.__streams = [];
 const md = navigator.mediaDevices;
 const gum = md.getUserMedia.bind(md);
 md.getUserMedia = async (c) => {
+  if (window.__gumError) {  // 카메라 오류 흉내 (NotAllowedError, NotReadableError 등)
+    const name = window.__gumError;
+    window.__gumError = null;
+    throw new DOMException("simulated", name);
+  }
   const s = await gum(c);
   window.__streams.push(s);
   if (window.__endNextTrack) {  // 시작하는 도중 카메라를 빼앗긴 상황 흉내
@@ -121,6 +126,14 @@ md.getUserMedia = async (c) => {
     s.getVideoTracks().forEach((t) => t.stop());
   }
   return s;
+};
+"""
+# video.play()가 400ms 늦게 끝나게 — 카메라 전환 중 첫 프레임을 기다리는 구간을 넓혀 경쟁을 재현
+SLOW_PLAY = """
+const nativePlay = HTMLMediaElement.prototype.play;
+HTMLMediaElement.prototype.play = function () {
+  const self = this;
+  return new Promise((resolve) => setTimeout(resolve, 400)).then(() => nativePlay.call(self));
 };
 """
 # 요청이 1초 늦게 끝나는 가짜 Wake Lock — 잡힌 잠금 수를 센다
@@ -392,7 +405,21 @@ def main() -> None:
             page.click("#token-show")
             expect(page.locator("#token")).to_have_attribute("type", "password")
             page.click("#settings-cancel")
-            step("설정 입력칸 16px(아이폰 확대 방지), 토큰 보기 전환")
+            for field in ("#token", "#server-url"):
+                expect(page.locator(field)).to_have_attribute("autocapitalize", "off")
+                expect(page.locator(field)).to_have_attribute("autocorrect", "off")
+            expect(page.locator(".legend")).to_contain_text("사람 기준")
+            step("설정 입력칸 16px(아이폰 확대 방지), 토큰 보기 전환, 자동 대문자·수정 끔, 범례는 사람 기준")
+
+            page.evaluate("() => { window.__gumError = 'NotReadableError'; }")
+            configure(page, TOKEN)
+            page.click("#start")
+            expect(page.locator("#notice")).to_contain_text("다른 앱")
+            page.evaluate("() => { window.__gumError = 'NotAllowedError'; }")
+            page.click("#start")
+            expect(page.locator("#notice")).to_contain_text("아이폰")
+            expect(status).not_to_have_text("연결됨")
+            step("카메라 오류 안내: 다른 앱이 사용 중(NotReadableError), 권한 거부 때 아이폰 경로")
 
             # 폰 키보드의 "이동"처럼 토큰 칸에서 Enter로 저장한다. 앞뒤 공백이 붙은 토큰.
             page.click("#settings-btn")
@@ -459,6 +486,12 @@ def main() -> None:
             expect(status).to_have_text("연결됨", timeout=30_000)
             step("시작하는 도중 카메라를 빼앗겨도 '연결됨'으로 빈 프레임을 보내지 않음")
 
+            page.evaluate("() => document.getElementById('video').pause()")
+            page.evaluate("() => document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_timeout(800)
+            assert not page.evaluate("() => document.getElementById('video').paused"), "탭 복귀 뒤 영상이 멈춘 채"
+            step("탭 복귀 때 멈춘 영상을 다시 재생 (아이폰 앱 전환 대비)")
+
             page2 = context.new_page()
             watch(page2, errors)
             page2.goto(PAGE)
@@ -518,6 +551,40 @@ def main() -> None:
             expect(other.locator("#notice")).to_contain_text("ALLOWED_ORIGINS")
             other.close()
             step("허용되지 않은 주소면 원인(ALLOWED_ORIGINS) 안내")
+
+            slow = browser.new_context(viewport={"width": 390, "height": 844})
+            slow.add_init_script(PROBE)
+            slow.add_init_script(SLOW_PLAY)
+            spage = slow.new_page()
+            sstatus = spage.locator("#status")
+            spage.goto(PAGE)
+            configure(spage, TOKEN)
+            spage.click("#start")
+            expect(sstatus).to_have_text("연결됨", timeout=30_000)
+
+            def flip_and_wait_for_camera():
+                before = spage.evaluate("() => window.__streams.length")
+                spage.click("#flip")
+                for _ in range(40):  # getUserMedia는 끝났고 play()를 기다리는 구간에 들어설 때까지
+                    if spage.evaluate("() => window.__streams.length") > before:
+                        return
+                    spage.wait_for_timeout(25)
+                raise AssertionError("카메라 전환 요청이 끝나지 않음")
+
+            flip_and_wait_for_camera()
+            spage.click("#flip")  # play() 대기 중 다시 전환
+            spage.wait_for_timeout(2500)
+            expect(sstatus).to_have_text("연결됨")
+            expect(spage.locator("#notice")).not_to_contain_text("카메라가 꺼졌")
+            assert spage.evaluate(LIVE_TRACKS) == 1, f"살아 있는 트랙 {spage.evaluate(LIVE_TRACKS)}개"
+            flip_and_wait_for_camera()
+            spage.click("#start")  # play() 대기 중 정지
+            expect(sstatus).to_have_text("정지")
+            spage.wait_for_timeout(1500)
+            expect(spage.locator("#notice")).not_to_contain_text("카메라가 꺼졌")
+            assert spage.evaluate(LIVE_TRACKS) == 0
+            slow.close()
+            step("카메라 전환 중(첫 프레임 대기) 다시 전환·정지해도 거짓 '카메라가 꺼졌습니다'·전체 정지 없음")
 
             locks = browser.new_context(viewport={"width": 390, "height": 844})
             locks.add_init_script(PROBE)

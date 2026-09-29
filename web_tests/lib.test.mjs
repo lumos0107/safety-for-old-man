@@ -31,11 +31,11 @@ test("서버 주소 정규화", () => {
     ["  wss://h.ts.net/ws  ", "wss://h.ts.net/ws"],
     ["http://127.0.0.1:8000", "ws://127.0.0.1:8000/ws"],
     ["ws://localhost:8000/ws", "ws://localhost:8000/ws"],
-    ["http://[::1]:8000", "ws://[::1]:8000/ws"],
   ];
   for (const [input, want] of cases) assert.equal(normalizeServerUrl(input), want, input);
   const bads = ["", "   ", "ftp://x.com", "http://", null, undefined,
-    "http://mypc.tailnet.ts.net", "ws://example.com/ws", "http://192.168.0.10:8000"]; // 원격 평문 거부
+    "http://mypc.tailnet.ts.net", "ws://example.com/ws", "http://192.168.0.10:8000",
+    "http://[::1]:8000"]; // 원격 평문 거부. [::1]은 CSP가 IPv6 주소를 허용할 수 없어 막는다
   for (const bad of bads) {
     assert.equal(normalizeServerUrl(bad), null, String(bad));
   }

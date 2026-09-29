@@ -245,10 +245,12 @@ async function startCamera() {
     if (request !== state.cameraRequest) return true;
     setNotice(
       e.name === "NotAllowedError"
-        ? "카메라 권한이 거부됐습니다. 주소창 왼쪽의 사이트 설정(자물쇠)에서 카메라를 허용한 뒤 새로고침하세요."
+        ? "카메라 권한이 거부됐습니다. 안드로이드·PC: 주소창 왼쪽 사이트 설정에서 카메라 허용. 아이폰: 설정 앱 → Safari(쓰는 브라우저) → 카메라 → 허용. 그다음 새로고침하세요."
         : e.name === "NotFoundError"
           ? "카메라를 찾을 수 없습니다."
-          : `카메라를 켤 수 없습니다 (${e.name}).`,
+          : e.name === "NotReadableError" || e.name === "AbortError"
+            ? "카메라를 켤 수 없습니다. 다른 앱(영상통화·카메라 앱 등)이 카메라를 쓰고 있을 수 있으니 그 앱을 닫고 다시 시작하세요."
+            : `카메라를 켤 수 없습니다 (${e.name}).`,
     );
     return false;
   }
@@ -269,6 +271,9 @@ async function startCamera() {
   }
   video.srcObject = state.stream;
   await video.play().catch(() => {});
+  // 첫 프레임을 기다리는 사이 더 새 요청(전환·정지)이 들어왔으면 그 요청이 카메라를 맡았다 — 실패가 아니다.
+  // (새 요청의 stopCamera가 이 스트림을 끄므로, 아래 '끝난 트랙' 검사로 가면 거짓 안내와 전체 정지가 된다)
+  if (request !== state.cameraRequest) return true;
   // ended 처리기는 실행 중(running)일 때만 멈추므로, 시작하는 도중에 이미 끝난 트랙은 여기서 걸러 낸다
   if (stream.getVideoTracks().some((t) => t.readyState === "ended")) {
     if (request === state.cameraRequest) stopCamera();
@@ -572,6 +577,7 @@ $("start").addEventListener("click", () => (state.running ? stop() : start()));
 $("settings-btn").addEventListener("click", openSettings);
 
 $("flip").addEventListener("click", async () => {
+  if (state.starting) return; // 시작하는 동안의 전환은 무시한다 (방향만 바뀌어 다음 전환이 같은 카메라를 다시 여는 것 방지)
   state.facing = state.facing === "user" ? "environment" : "user";
   if (state.running && !(await startCamera())) stop();
   else applyFace(); // 새 카메라 영상으로 얼굴 계산을 다시 건다
@@ -588,6 +594,8 @@ $("mode").addEventListener("click", () => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && state.running) {
     requestWakeLock(); // 탭이 가려지면 브라우저가 해제하므로 다시 요청
+    // 아이폰 등은 다른 앱에 다녀오면 영상을 멈춰 둘 수 있다 — 멈춘 영상으로 같은 프레임을 계속 보내지 않게 다시 재생
+    if (video.srcObject && video.paused) video.play().catch(() => {});
     pump();
   }
 });
