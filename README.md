@@ -7,7 +7,9 @@
 영상은 저장하지 않는다. 촬영 전 대상자 동의를 받는다.
 
 - 페이지: https://lumos0107.github.io/safety-for-old-man/
-- 설계: [design/2026-09-29-web-pose-design.md](design/2026-09-29-web-pose-design.md)
+- 설계: [자세 인식](design/2026-09-29-web-pose-design.md) · [얼굴 윤곽](design/2026-09-30-face-outline-design.md) · [개발 경위와 결정 기록](design/개발_경위와_결정_기록.md) · [평가·보완 기록](design/2026-09-30-evaluation-rounds.md)
+
+> **운영 원칙:** GitHub Pages는 계정의 모든 저장소가 같은 출처(`https://lumos0107.github.io`)를 쓴다. 토큰이 그 출처의 브라우저 저장소에 있으므로, **이 계정에는 다른 Pages 사이트를 두지 않는다.** 두어야 하면 이 페이지를 전용 계정·조직으로 옮긴다.
 
 ## 서버 (개발 PC)
 
@@ -35,6 +37,8 @@ powershell -ExecutionPolicy Bypass -File server\run.ps1   # Funnel 켜고 서버
 - 실기기 확인할 것: 거리별(0.5 / 1 / 2m) 인식, 켬/끔에 따른 뼈대 fps·발열, 아이폰 Safari 동작과 앱 전환 뒤 복구.
 
 ## 테스트
+
+필요: Python 가상환경(위), Node 21 이상(`node --test`의 glob), 설치된 Chrome. 종단 검증은 포트 5500·8765·8766을 쓴다.
 
 ```powershell
 .venv\Scripts\python -m pytest                      # 서버 (GPU 필요)

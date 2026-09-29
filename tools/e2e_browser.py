@@ -4,6 +4,7 @@
 설치된 Chrome을 쓴다 (playwright 브라우저 내려받기 불필요). 스크린샷은 저장소 밖에 둔다.
 """
 import argparse
+import json
 import os
 import re
 import socket
@@ -98,6 +99,12 @@ PROBE = """
 window.__csp = [];
 document.addEventListener("securitypolicyviolation",
   (e) => window.__csp.push(e.violatedDirective + " " + e.blockedURI));
+window.__sent = [];
+const nativeSend = WebSocket.prototype.send;
+WebSocket.prototype.send = function (data) {
+  if (typeof data === "string") window.__sent.push(data);
+  return nativeSend.call(this, data);
+};
 window.__sockets = [];
 const NativeWS = window.WebSocket;
 window.WebSocket = class extends NativeWS {
@@ -131,6 +138,14 @@ def watch(page, errors: list) -> None:
 # MediaPipe는 모델을 만들 때 사용 통계 기록기를 붙이고 Google로 보내려 한다 (끄는 옵션 없음).
 # 페이지 CSP가 이를 막는 것이 의도된 동작이다 — 얼굴 기능 설계 4장. 이 차단만 예상된 위반으로 분리한다.
 TELEMETRY = "odml.pa.googleapis.com"
+
+
+def assert_no_face_data_sent(page) -> None:
+    """서버로 간 텍스트 메시지는 auth와 {type:frame, seq}뿐이어야 한다 — 얼굴 좌표·개수가 섞이면 실패."""
+    for raw in page.evaluate("() => window.__sent"):
+        msg = json.loads(raw)
+        ok = (msg.get("type") == "auth" and set(msg) == {"type", "token"}) or              (msg.get("type") == "frame" and set(msg) == {"type", "seq"})
+        assert ok, f"서버로 예상 밖 메시지: {raw[:120]}"
 
 
 def csp_violations(page) -> list:
@@ -203,6 +218,7 @@ def face_checks(p, tmp: Path, shots: Path) -> None:
     expect(faces).to_have_text(FACES_AT_LEAST_1, timeout=60_000)
     page.wait_for_timeout(1000)
     page.screenshot(path=str(shots / "3_face_live.png"))
+    expect(page.locator("#face-notice")).to_have_text("")
     step(f"서버 연결 상태에서 뼈대와 얼굴 윤곽 ({faces.text_content()}개)")
 
     page.click("#mode")
@@ -235,25 +251,34 @@ def face_checks(p, tmp: Path, shots: Path) -> None:
     ctx2 = browser.new_context(viewport={"width": 390, "height": 844})  # 캐시가 따로인 새 컨텍스트
     ctx2.add_init_script(PROBE)
     failing = ctx2.new_page()
+    failing_errors: list = []
+    watch(failing, failing_errors)
     failing.route("**/face_landmarker.task", lambda route: route.abort())
     failing.goto(PAGE)
     set_face(failing, True, API_PORT)
     failing.click("#start")
     expect(failing.locator("#status")).to_have_text("연결됨", timeout=30_000)
+    failing.click("#settings-btn")  # 설정 창을 연 채로 실패를 맞는다
     expect(failing.locator("#face-notice")).to_contain_text("불러오지 못해", timeout=60_000)
+    assert not failing.is_checked("#face-toggle"), "열린 설정 창의 체크박스가 켬으로 남음"
+    failing.click("#settings-cancel")
     failing.wait_for_timeout(3000)
     expect(failing.locator("#face-notice")).to_contain_text("불러오지 못해")
     expect(failing.locator("#faces")).to_have_text("-")
     failing.click("#settings-btn")
     assert not failing.is_checked("#face-toggle"), "실패 뒤 설정이 켬으로 남음"
     failing.click("#settings-cancel")
+    # 일부러 막은 모델 요청의 실패(net::ERR_FAILED)만 예상된 오류다
+    errors += [e for e in failing_errors if "net::ERR_FAILED" not in e]
+    errors += [f"CSP(실패 경로): {v}" for v in csp_violations(failing)]
     ctx2.close()
     step("서버 연결 중 얼굴 모델 불러오기 실패 → 안내문이 남고 설정은 끔으로 돌아감")
 
     errors += [f"CSP: {v}" for v in csp_violations(page)]
+    assert_no_face_data_sent(page)
     if errors:
         raise SystemExit(f"얼굴 윤곽 페이지 오류: {errors}")
-    step("얼굴 윤곽: 페이지 오류·콘솔 오류·CSP 위반 없음"
+    step("얼굴 윤곽: 서버로 간 메시지에 얼굴 정보 없음, 페이지 오류·콘솔 오류·CSP 위반 없음"
          + (" (MediaPipe 사용 통계 전송은 CSP가 차단함)" if telemetry_blocked(page) else ""))
     browser.close()
 
@@ -265,6 +290,8 @@ def face_checks(p, tmp: Path, shots: Path) -> None:
         pg = b.new_context(viewport={"width": 390, "height": 844})
         pg.add_init_script(PROBE)
         page = pg.new_page()
+        far_errors: list = []
+        watch(page, far_errors)
         page.goto(PAGE)
         set_face(page, True, API_PORT)
         page.click("#start")
@@ -272,7 +299,13 @@ def face_checks(p, tmp: Path, shots: Path) -> None:
             expect(page.locator("#faces")).to_have_text(FACES_AT_LEAST_1, timeout=30_000)
         except AssertionError:
             pass
-        record.append(f"{scale:.2f}배 → 얼굴 {page.locator('#faces').text_content()}")
+        found = page.locator("#faces").text_content()
+        if found == "0":  # 못 잡으면 가까이 대라는 안내가 떠야 한다
+            expect(page.locator("#face-notice")).to_contain_text("가까이", timeout=10_000)
+        far_errors += [f"CSP: {v}" for v in csp_violations(page)]
+        if far_errors:
+            raise SystemExit(f"먼 얼굴 페이지 오류: {far_errors}")
+        record.append(f"{scale:.2f}배 → 얼굴 {found}")
         b.close()
     print("기록  멀리 있는 얼굴 흉내 (1280x720 가운데 배치): " + ", ".join(record), flush=True)
 
@@ -338,6 +371,7 @@ def main() -> None:
             page.click("#mode")
             page.wait_for_timeout(1000)
             page.screenshot(path=str(args.shots / "2_sync.png"))
+            expect(page.locator(".hint")).not_to_contain_text("'동기'로 바꾸세요")
             expect(page.locator("#stage")).to_have_class(re.compile(r"\bsync\b"))
             page.click("#mode")
             step("동기 표시 전환")
@@ -353,6 +387,15 @@ def main() -> None:
             assert page.evaluate("() => window.__sockets.length") - before == 1, "시작 두 번에 소켓이 여러 개"
             assert page.evaluate(LIVE_TRACKS) == 1, f"살아 있는 카메라 트랙 {page.evaluate(LIVE_TRACKS)}개"
             step("시작·카메라 전환을 빠르게 두 번 눌러도 소켓 1개, 카메라 트랙 1개, 연결 유지")
+
+            page.evaluate("() => { document.getElementById('flip').click(); document.getElementById('start').click(); }")
+            expect(status).to_have_text("정지")
+            page.wait_for_timeout(2000)
+            assert page.evaluate(LIVE_TRACKS) == 0, f"정지했는데 카메라 트랙 {page.evaluate(LIVE_TRACKS)}개 살아 있음"
+            assert page.evaluate("() => !document.getElementById('video').srcObject"), "정지했는데 영상이 붙어 있음"
+            page.click("#start")
+            expect(status).to_have_text("연결됨", timeout=30_000)
+            step("카메라 전환 직후 정지해도 카메라가 꺼짐")
 
             page2 = context.new_page()
             watch(page2, errors)

@@ -120,6 +120,17 @@ export function visiblePoints(kpts, rect, minConf) {
   return out;
 }
 
+const FRAME_ERRORS = {
+  too_large: "보낸 프레임이 너무 큽니다.",
+  bad_image: "서버가 프레임을 읽지 못했습니다.",
+  bad_message: "서버가 메시지를 이해하지 못했습니다.",
+  server_error: "서버 계산 중 오류가 났습니다.",
+};
+
+export function frameErrorText(code) {
+  return FRAME_ERRORS[code] ?? `프레임 오류 (${code})`;
+}
+
 export function ema(prev, sample, alpha = 0.2) {
   return prev == null ? sample : prev + alpha * (sample - prev);
 }

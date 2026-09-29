@@ -41,6 +41,7 @@ body {
   background: var(--panel);
 }
 button {
+  word-break: keep-all; /* 한글 버튼 문구가 단어 중간에서 줄바꿈되지 않게 */
   font: inherit; color: var(--text); background: #2a2e37;
   border: 0; border-radius: 10px; padding: 12px 6px; min-height: 44px;
 }

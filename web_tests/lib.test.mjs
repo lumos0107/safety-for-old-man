@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   CLOSE, STATUS, closePolicy, retryDelayMs, normalizeServerUrl, cleanToken,
   fitContain, scaleToLongSide, SKELETON, toCanvas, visibleSegments, visiblePoints, ema,
-  COLORS, pointColor, segmentColor, FACE_OVAL, faceOutline, pickOutline, outlineToCanvas,
+  COLORS, pointColor, segmentColor, FACE_OVAL, faceOutline, pickOutline, outlineToCanvas, frameErrorText,
 } from "../lib.js";
 
 test("재연결하지 않는 종료 코드", () => {
@@ -152,4 +152,12 @@ test("pickOutline: 478점에서 윤곽 36점의 [x, y]만 남긴다 (z와 나머
 
 test("outlineToCanvas: 윤곽 36점을 화면 좌표로", () => {
   assert.deepEqual(outlineToCanvas([[0.5, 0.25], [1.2, -0.1]], { x: 10, y: 20, w: 100, h: 200 }), [[60, 70], [130, 0]]);
+});
+
+test("프레임 오류 코드는 한국어 안내로", () => {
+  assert.equal(frameErrorText("too_large"), "보낸 프레임이 너무 큽니다.");
+  assert.equal(frameErrorText("bad_image"), "서버가 프레임을 읽지 못했습니다.");
+  assert.equal(frameErrorText("bad_message"), "서버가 메시지를 이해하지 못했습니다.");
+  assert.equal(frameErrorText("server_error"), "서버 계산 중 오류가 났습니다.");
+  assert.equal(frameErrorText("something_new"), "프레임 오류 (something_new)");
 });

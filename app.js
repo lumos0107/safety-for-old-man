@@ -1,6 +1,6 @@
 import {
   STATUS, closePolicy, retryDelayMs, normalizeServerUrl, cleanToken,
-  fitContain, scaleToLongSide, visibleSegments, visiblePoints, ema, COLORS, outlineToCanvas,
+  fitContain, scaleToLongSide, visibleSegments, visiblePoints, ema, COLORS, outlineToCanvas, frameErrorText,
 } from "./lib.js";
 import { createFaceTracker } from "./face.js";
 
@@ -25,6 +25,12 @@ const KEY_URL = "pose.serverUrl";
 const KEY_TOKEN = "pose.token";
 const KEY_FACE = "pose.face";
 const FACE_LOADING = "얼굴 모델 불러오는 중…";
+const FACE_FAR = "얼굴을 찾지 못했습니다. 얼굴이 화면 폭의 1/5 이상 되도록 카메라를 가까이 대세요.";
+const FACE_FAR_AFTER_MS = 3000;
+const HINTS = {
+  live: "실시간 표시에서는 뼈대가 조금 늦게 따라옵니다. 정확히 겹쳐 보려면 표시 방식을 '동기'로 바꾸세요. 영상은 저장되지 않습니다.",
+  sync: "동기 표시: 서버에 보낸 그 프레임 위에 결과를 그려 정확히 겹칩니다. 영상은 끊겨 보일 수 있습니다. 영상은 저장되지 않습니다.",
+};
 const FACE_ERRORS = {
   unsupported: "이 브라우저에서는 얼굴 윤곽을 쓸 수 없습니다. 뼈대는 그대로 동작합니다.",
   timeout: "얼굴 모델을 30초 안에 불러오지 못해 얼굴 윤곽을 껐습니다.",
@@ -40,6 +46,7 @@ const state = {
   stream: null, wakeLock: null,
   starting: false, cameraRequest: 0,
   shownFaces: null, pendingFace: null, // 동기 표시: 보낸 프레임의 얼굴 결과와 그 seq
+  faceMissingSince: null, // 얼굴을 못 찾기 시작한 시각 (거리 안내용)
 };
 
 // ---------- 설정 (이 브라우저에만 저장) ----------
@@ -89,6 +96,16 @@ function setNotice(text) {
 // 얼굴 윤곽 안내는 따로 둔다 — 서버 흐름(프레임 결과·재연결)이 지우지 못하게
 function setFaceNotice(text) {
   $("face-notice").textContent = text || "";
+}
+// 얼굴이 계속 안 잡히면 거리 한계를 안내하고, 잡히면 지운다 (탐지기는 가까운 거리용)
+function noteFaceCount(n) {
+  if (n > 0) {
+    state.faceMissingSince = null;
+    if ($("face-notice").textContent === FACE_FAR) setFaceNotice("");
+    return;
+  }
+  state.faceMissingSince ??= performance.now();
+  if (performance.now() - state.faceMissingSince >= FACE_FAR_AFTER_MS) setFaceNotice(FACE_FAR);
 }
 function resetStats() {
   state.fps = null;
@@ -174,11 +191,16 @@ function clearOverlay() {
 const face = createFaceTracker({
   onUpdate(kind) {
     if (kind === "loading") setFaceNotice(FACE_LOADING);
-    if (kind === "ready" || kind === "off") setFaceNotice("");
+    if (kind === "ready" || kind === "off") {
+      setFaceNotice("");
+      state.faceMissingSince = null;
+    }
+    if (kind === "result" && state.mode === "live") noteFaceCount(face.live?.length ?? 0);
     draw();
   },
   onError(code) {
-    saveFace(false); // 체크박스도 끔으로 되돌린다
+    saveFace(false); // 저장된 설정과, 열려 있을 수 있는 설정 창의 체크박스를 모두 끔으로
+    $("face-toggle").checked = false;
     setFaceNotice(FACE_ERRORS[code] ?? FACE_ERRORS.load);
     draw();
   },
@@ -331,7 +353,7 @@ function onMessage(ws, ev) {
   clearTimeout(state.replyTimer);
   state.waitingSeq = null;
   if (msg.type === "result") onResult(msg);
-  else setNotice(`프레임 오류: ${msg.code}`);
+  else setNotice(frameErrorText(msg.code));
   pump();
 }
 
@@ -409,6 +431,7 @@ function onResult(r) {
   shown.height = capture.height;
   sctx.drawImage(capture, 0, 0);
   state.shownFaces = state.pendingFace?.seq === r.seq ? state.pendingFace.faces : null;
+  if (state.shownFaces && state.mode === "sync") noteFaceCount(state.shownFaces.length);
   setNotice(""); // 앞선 프레임 오류 안내 지우기 (얼굴 안내는 따로라 지우지 않는다)
   $("fps").textContent = state.fps == null ? "-" : state.fps.toFixed(1);
   $("ms").textContent = r.infer_ms.toFixed(1);
@@ -442,6 +465,7 @@ async function start() {
 
 function stop() {
   state.running = false;
+  state.cameraRequest++; // 진행 중인 카메라 요청(전환 등)이 정지 뒤에 끝나도 카메라를 다시 붙이지 않게
   $("start").textContent = "시작";
   clearTimeout(state.retryTimer);
   detachSocket();
@@ -507,6 +531,7 @@ $("mode").addEventListener("click", () => {
   state.mode = state.mode === "live" ? "sync" : "live";
   $("mode").textContent = state.mode === "live" ? "표시: 실시간" : "표시: 동기";
   stage.classList.toggle("sync", state.mode === "sync");
+  $("hint").textContent = HINTS[state.mode];
   applyFace(); // 실시간이면 영상, 동기면 보낸 프레임을 계산
 });
 
