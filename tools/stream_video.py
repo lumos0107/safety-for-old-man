@@ -1,7 +1,7 @@
 """동영상(없으면 예시 사진 반복)을 /ws로 흘려보내 카메라 없이 전체 경로를 검증한다.
 
 사용:
-  .venv\\Scripts\\python tools/stream_video.py --url ws://127.0.0.1:8000/ws
+  .venv\\Scripts\\python tools/stream_video.py --url ws://127.0.0.1:18080/ws
   .venv\\Scripts\\python tools/stream_video.py --url wss://<pc이름>.<tailnet>.ts.net/ws --video 파일.mp4
 토큰은 server/.env의 TOKEN을 쓴다 (--token으로 바꿀 수 있음).
 """
