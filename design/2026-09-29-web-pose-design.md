@@ -63,7 +63,7 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
   - uvicorn `--ws-max-size 2097152`(2 MB). 이보다 크면 서버가 연결을 끊는다.
   - 앱: 1 MB 초과는 `too_large` 응답, 연결 유지.
   - 디코딩 전에 PIL `Image.open(...).size`로 헤더상 해상도를 읽고, 긴 변이 2000px를 넘으면 `bad_image`로 거부한다 (압축 폭탄 방지).
-- **로그**: ultralytics는 `verbose=False, save=False`. uvicorn 접속 로그는 `warning` 수준으로 낮춘다 (접속 로그에 Funnel이 넘긴 실제 IP가 찍힐 수 있어 `info`는 쓰지 않음). 이미지·토큰·IP는 어떤 로그에도 남기지 않는다. 서버 창에는 운영에 필요한 사건만 시각과 함께 남긴다: 준비 완료, 인증 성공·연결 대체, 허용되지 않은 주소 거부(출처 80자까지), 인증 실패는 1분 요약 (2026-09-30 합의 반영).
+- **로그**: ultralytics는 `verbose=False, save=False`. uvicorn 접속 로그는 `warning` 수준으로 낮춘다 (접속 로그에 Funnel이 넘긴 실제 IP가 찍힐 수 있어 `info`는 쓰지 않음). 이미지·토큰·IP는 어떤 로그에도 남기지 않는다. 서버 창에는 운영에 필요한 사건만 시각과 함께 남긴다: 준비 완료, 인증 성공·연결 대체, 허용되지 않은 주소 거부, 인증 실패. 거부·실패는 첫 건은 바로, 이어지는 건은 1분마다 "N건 더"로 모으고, 상대가 보낸 출처는 80자까지·출력 가능한 ASCII 밖은 모두 이스케이프한다 (2026-09-30 합의 1~3회차). 로그 읽는 법은 README.
 - **외부 통계 없음**: Ultralytics의 사용 통계(Google Analytics) 전송을 서버 프로세스에서 끈다 (`server/pose.py`). 화면 쪽 MediaPipe 통계를 CSP로 막은 것과 같은 원칙.
 - **입력 길이**: 인증·frame 텍스트는 256자 상한 — 깊게 중첩된 JSON이나 짝 없는 서로게이트가 예외 트레이스백을 내지 않고 4001/bad_message가 된다.
 - **Funnel은 쓸 때만 켠다**: `server/run.ps1`이 시작할 때 `tailscale funnel --bg 18080`을 켜고, 종료할 때(Ctrl+C) `finally`에서 `tailscale funnel --https=443 off`로 끈다 (설치된 1.102.4에서 동작 확인).
