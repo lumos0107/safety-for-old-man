@@ -116,3 +116,16 @@ def test_gen_token_force_adds_token_line_when_missing(tmp_path):
     lines = env.read_text(encoding="utf-8").splitlines()
     assert lines[0].startswith("TOKEN=") and lines[1] == "ALLOWED_ORIGINS=https://lumos0107.github.io"
 
+
+@pytest.mark.parametrize("original", [
+    "TOKEN=" + "a" * 43 + "\nTOKEN=" + "b" * 43 + "\n",          # TOKEN 줄이 둘 — 서버는 마지막 줄을 쓴다
+    "export TOKEN=" + "c" * 43 + "\nALLOWED_ORIGINS=https://x.io\n",  # export 형식도 TOKEN으로 읽힌다
+], ids=["duplicate_lines", "export_form"])
+def test_gen_token_force_refuses_when_new_token_would_not_apply(tmp_path, original):
+    env = tmp_path / ".env"
+    env.write_text(original, encoding="utf-8")
+    result = run_gen("--env", str(env), "--force")
+    assert result.returncode != 0
+    assert "적용되지 않" in result.stderr
+    assert env.read_text(encoding="utf-8") == original  # 파일은 건드리지 않는다
+

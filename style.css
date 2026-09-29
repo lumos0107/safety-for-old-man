@@ -8,6 +8,7 @@ html, body { margin: 0; height: 100%; }
 body {
   display: flex; flex-direction: column; height: 100dvh;
   background: var(--bg); color: var(--text);
+  word-break: keep-all; overflow-wrap: anywhere; /* 한글은 낱말 단위로 줄바꿈, 긴 영문·주소는 넘치지 않게 */
   font: 15px/1.4 system-ui, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
 }
 .bar {

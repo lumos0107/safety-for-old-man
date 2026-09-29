@@ -53,3 +53,19 @@ def test_page_files_served(page_server, path):
                                   "/%2e%2e/%2e%2e/Windows/win.ini", "/vendor/../server/.env"])
 def test_secret_and_repo_files_refused(page_server, path):
     assert status(page_server + path) == 404
+
+
+def raw_status(base: str, target: str) -> int:
+    """urllib이 만들 수 없는 요청 대상(절대형 등)을 원시 소켓으로 보낸다."""
+    host, port = base.split("//")[1].split(":")
+    with socket.create_connection((host, int(port)), timeout=3) as s:
+        s.sendall(f"GET {target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".encode("ascii"))
+        head = s.recv(64)
+    return int(head.split()[1])
+
+
+@pytest.mark.parametrize("target", ["x://server%2f.env", "X://server%2f.env", "a://.git%2fconfig", "x://server/",
+                                    "server/.env", "http://x/server/.env", "x:/server/.env"])
+def test_absolute_form_targets_refused(page_server, target):
+    # 한 글자 스킴은 Windows에서 드라이브로 읽혀 허용 목록 검사를 건너뛴 적이 있다 (합의 R2-2)
+    assert raw_status(page_server, target) in (400, 404)
