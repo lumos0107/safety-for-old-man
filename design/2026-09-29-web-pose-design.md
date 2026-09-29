@@ -125,6 +125,7 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
 - 탭이 가려지면(`visibilitychange`) 전송을 멈추고, 돌아오면 재개한다.
 - 전송 중에는 Screen Wake Lock으로 화면 꺼짐을 막는다 (지원하지 않는 브라우저는 무시). 탭이 가려지면 브라우저가 자동으로 해제하므로 `visibilitychange`로 돌아왔을 때 다시 요청한다.
 - 카메라 권한 거부 시 브라우저 설정에서 허용하는 방법을 안내한다.
+- (2026-09-30 추가) 관절은 부위별 색(얼굴 분홍·몸통 노랑·왼쪽 파랑·오른쪽 주황)으로 그린다. 얼굴 윤곽 표시(시연용, 기본 끔, 브라우저 계산)는 `design/2026-09-30-face-outline-design.md`.
 
 ### 백엔드 (`server/`)
 - `app.py` — FastAPI, WebSocket `/ws`, `GET /health`

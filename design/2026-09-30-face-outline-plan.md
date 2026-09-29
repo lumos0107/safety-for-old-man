@@ -84,3 +84,14 @@
 - [ ] 전체 검증: `pytest`, Node, e2e.
 - [ ] 새 검토자 전체 검토 → 중요 이상 수정(각각 RED→GREEN).
 - [ ] `main` push, Pages에 `vendor/mediapipe/*.wasm` 200 확인.
+
+---
+
+## 실행 기록 (결정)
+
+- Task 1: `.gitattributes`에 `vendor/** -text` 추가 — Windows 자동 줄바꿈 변환이 JS·LICENSE 바이트를 바꿔 SHA-256 확인이 깨지는 것을 막음. 저장된 바이트가 해시와 같음을 확인.
+- Task 3: 콘솔 오류 수집에서 예상된 것 제외 — 자동 `favicon.ico` 404, 서버를 일부러 끈 단계의 `WebSocket connection to` 실패, MediaPipe의 `INFO: Created TensorFlow Lite XNNPACK delegate`(정보를 error로 찍음). 수집기가 실제 위반을 잡는지 외부 이미지를 넣어 확인함.
+- Task 4: 얼굴 테스트 영상을 원본 `zidane.jpg`에서 **오른쪽 사람 2배 확대**로 바꿈 — 원본(얼굴 폭 약 1/10)은 탐지기가 못 잡음을 실측(확대본 1/5은 잡음). 계획의 전제(원본에서 잡힌다)가 틀렸음. 멀리 있는 얼굴 기록: 0.5배(=원본 크기)·0.33배 모두 0.
+- Task 4: MediaPipe 사용 통계 전송(`odml.pa.googleapis.com`)을 CSP가 차단 — 끄는 옵션이 없고, 라이브러리를 고치지 않고 차단을 의도된 동작으로 둠. e2e는 이 차단만 예상된 위반으로 분리 (설계 4장).
+- Task 4: 설정 저장 시 서버 주소·토큰이 바뀔 때만 재연결 — 얼굴 켜기/끄기로 연결이 끊기지 않게 (계획에 없던 개선).
+
