@@ -56,11 +56,7 @@
   - 비SIMD 판(11MB)은 넣지 않는다. 라이브러리가 스스로 경로를 고르면 비SIMD 파일을 찾다 404가 나므로, 불러오기 전에 `FilesetResolver.isSimdSupported()`로 직접 확인하고 파일 경로는 SIMD 판으로 **고정**해 넘긴다. 지원하지 않는 오래된 브라우저(iOS 16.4 미만 등)에서는 불러오지 않고 "이 브라우저에서 얼굴 윤곽을 쓸 수 없음"을 띄운다. 뼈대는 그대로 동작한다.
   - 파일의 출처(npm 패키지 주소·버전, 모델 주소)와 SHA-256을 `vendor/mediapipe/SOURCE.md`에 적어 누가 받아도 같은 파일인지 확인할 수 있게 한다.
   - Apache-2.0 재배포 조건에 따라 라이선스 사본 `vendor/mediapipe/LICENSE`를 함께 두고 `SOURCE.md`에서 가리킨다. `.gitattributes`에 `vendor/** linguist-vendored`를 넣어 GitHub 언어 통계에서 뺀다.
-- **보안 정책(CSP)**: MediaPipe는 `.wasm`과 `.task`를 **fetch로** 받으므로 `connect-src`에 `'self'`가 있어야 한다 (`connect-src`를 따로 정하면 `default-src 'self'`는 fetch에 적용되지 않는다). WebAssembly 실행에는 `'wasm-unsafe-eval'`이 필요하다. 새 정책:
-  ```
-  default-src 'self'; script-src 'self' 'wasm-unsafe-eval';
-  connect-src 'self' wss: ws://localhost:* ws://127.0.0.1:*; img-src 'self' blob:; media-src 'self' blob:
-  ```
+- **보안 정책(CSP)**: MediaPipe는 `.wasm`과 `.task`를 **fetch로** 받으므로 `connect-src`에 `'self'`가 있어야 한다 (`connect-src`를 따로 정하면 `default-src 'self'`는 fetch에 적용되지 않는다). WebAssembly 실행에는 `'wasm-unsafe-eval'`이 필요하다. 정책 전문은 `index.html`이 기준이다 (사본을 두면 어긋난다 — 이 문서를 처음 쓸 때 적은 사본에는 3회차 평가에서 더한 `base-uri 'none'; form-action 'none'`이 빠져 있었다).
   외부 주소는 여전히 허용하지 않는다. 구현 중 추가 완화가 필요하면 이 문서에 이유와 함께 적는다. 아이폰 Safari가 `'wasm-unsafe-eval'`을 받아들이는지는 실기기로 확인한다.
   - (구현 중 발견) MediaPipe는 모델을 만들 때 **사용 통계 기록기**를 붙여 `https://odml.pa.googleapis.com/v1/log`로 보내려 한다. 끄는 옵션이 없다. 이 CSP가 그 전송을 **막는 것이 의도된 동작**이다 — 이 기기 밖으로 아무것도 나가지 않는다. 라이브러리 파일을 고쳐 끄지 않는 이유: 원본 그대로여야 출처·해시 기록이 의미가 있다. 기록기는 모델 인스턴스마다 만들어지고(닫을 때 한 번 더 보내려 함) 한 번 실패하면 그 인스턴스는 다시 보내지 않으므로, 차단 오류는 켤 때·다시 만들 때·GPU→CPU 전환 때마다 한 번씩 난다 (최종 검토에서 정정). 보내려는 내용은 성능 통계이고 전부 차단된다. 종단 테스트는 이 차단만 예상된 위반으로 분리해 확인한다.
 - 모델은 **얼굴 윤곽을 처음 켤 때만** 불러온다. 끈 상태로 쓰는 사람은 16MB를 내려받지 않는다.

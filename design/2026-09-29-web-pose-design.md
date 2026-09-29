@@ -33,7 +33,7 @@
    ▼
 https://<pc이름>.<tailnet>.ts.net/ws                                    ← Tailscale Funnel
    ▼
-[이 PC] FastAPI 백엔드 (127.0.0.1:8000) + YOLO11n-pose, imgsz 640 (RTX 4080 SUPER)
+[이 PC] FastAPI 백엔드 (127.0.0.1:18080, 2026-09-30 전에는 8000) + YOLO11n-pose, imgsz 640 (RTX 4080 SUPER)
    │ 관절 좌표 JSON만 반환 · 이미지는 메모리에서만 처리, 디스크·로그에 남기지 않음
    ▼
 [브라우저] 카메라 화면 위에 박스·뼈대를 그림
@@ -63,9 +63,11 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
   - uvicorn `--ws-max-size 2097152`(2 MB). 이보다 크면 서버가 연결을 끊는다.
   - 앱: 1 MB 초과는 `too_large` 응답, 연결 유지.
   - 디코딩 전에 PIL `Image.open(...).size`로 헤더상 해상도를 읽고, 긴 변이 2000px를 넘으면 `bad_image`로 거부한다 (압축 폭탄 방지).
-- **로그**: ultralytics는 `verbose=False, save=False`. uvicorn 접속 로그는 `warning` 수준으로 낮춘다. 이미지·토큰은 어떤 로그에도 남기지 않는다.
-- **Funnel은 쓸 때만 켠다**: `server/run.ps1`이 시작할 때 `tailscale funnel --bg 8000`을 켜고, 종료할 때(Ctrl+C) `finally`에서 `tailscale funnel --https=443 off`로 끈다 (설치된 1.102.4에서 동작 확인).
-  - 터미널 창을 닫거나 PC가 꺼지면 `finally`가 실행되지 않아 Funnel이 켜진 채 남는다. 백엔드가 꺼져 있으면 502만 돌아가므로 위험은 낮지만, 9장의 확인 절차로 끈다.
+- **로그**: ultralytics는 `verbose=False, save=False`. uvicorn 접속 로그는 `warning` 수준으로 낮춘다 (접속 로그에 Funnel이 넘긴 실제 IP가 찍힐 수 있어 `info`는 쓰지 않음). 이미지·토큰·IP는 어떤 로그에도 남기지 않는다. 서버 창에는 운영에 필요한 사건만 시각과 함께 남긴다: 준비 완료, 인증 성공·연결 대체, 허용되지 않은 주소 거부(출처 80자까지), 인증 실패는 1분 요약 (2026-09-30 합의 반영).
+- **외부 통계 없음**: Ultralytics의 사용 통계(Google Analytics) 전송을 서버 프로세스에서 끈다 (`server/pose.py`). 화면 쪽 MediaPipe 통계를 CSP로 막은 것과 같은 원칙.
+- **입력 길이**: 인증·frame 텍스트는 256자 상한 — 깊게 중첩된 JSON이나 짝 없는 서로게이트가 예외 트레이스백을 내지 않고 4001/bad_message가 된다.
+- **Funnel은 쓸 때만 켠다**: `server/run.ps1`이 시작할 때 `tailscale funnel --bg 18080`을 켜고, 종료할 때(Ctrl+C) `finally`에서 `tailscale funnel --https=443 off`로 끈다 (설치된 1.102.4에서 동작 확인).
+  - 터미널 창을 닫거나 PC가 꺼지면 `finally`가 실행되지 않아 Funnel이 켜진 채 남는다. 그 포트를 아무것도 안 쓰면 502만 돌아가지만, **나중에 같은 포트로 다른 프로그램(다른 프로젝트의 개발 서버 등)을 띄우면 그것이 인증 없이 인터넷에 공개된다.** 그래서 포트를 흔한 8000에서 18080으로 옮겼고(2026-09-30 합의), 재부팅·창 닫기 뒤에는 9장의 확인 절차로 끈다.
   - `run.ps1`은 시작할 때 Funnel이 이미 켜져 있으면 그대로 다시 설정하고 진행한다.
 - **촬영 동의**: 팀원·시험 참가자를 촬영하기 전에 동의를 받는다.
 
@@ -117,7 +119,7 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
   - 아래: 시작/정지, 앞/뒤 카메라 전환, 표시 방식 전환, 설정(서버 주소·토큰)
 - 서버 주소와 토큰은 `localStorage`에만 저장한다. 코드와 저장소에는 넣지 않는다. 같은 출처를 쓰는 다른 Pages 프로젝트와 겹치지 않도록 키에 접두사를 붙인다 (`pose.serverUrl`, `pose.token`).
 - 서버 주소는 `https`/`wss`만 받는다. 암호화되지 않은 `http`/`ws`는 `localhost`·`127.0.0.1`·`[::1]`일 때만 허용한다 (토큰이 평문으로 원격에 가지 않게).
-- `index.html`에 Content-Security-Policy meta 태그를 둔다 (보조 방어): `default-src 'self'; connect-src wss: ws://localhost:* ws://127.0.0.1:*`
+- `index.html`에 Content-Security-Policy meta 태그를 둔다 (보조 방어). **정책의 기준은 `index.html`이다** — 문서에 사본을 두면 어긋나므로 여기에는 적지 않는다 (얼굴 윤곽 때 `'wasm-unsafe-eval'`·`connect-src 'self'`, 3회차 평가 때 `base-uri`·`form-action`이 더해짐).
 - **표시 방식** (지연 대응): 뼈대는 왕복·추론 시간만큼 지난 프레임의 결과라 움직이면 밀려 보인다.
   - 실시간(기본): 실시간 영상 위에 최신 결과. 화면 안내에 "뼈대는 약간 늦게 따라옴"을 적는다.
   - 동기: 결과가 도착할 때 그 결과를 만든 프레임을 따로 보관하고, 그 프레임 위에 결과를 그린다. 영상은 끊겨 보이지만 뼈대가 정확히 겹친다 (창 크기 변경·모드 전환으로 다시 그려도 같다). 인식 정확도를 볼 때 쓴다.
@@ -135,7 +137,8 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
 - 추론은 **추론 전용 `ThreadPoolExecutor(max_workers=1)`**로 넘겨 이벤트 루프를 막지 않는다. 인증 연결은 1개지만, 연결이 대체되는 순간 이전 연결의 추론이 아직 스레드에서 돌고 있을 수 있다. ultralytics 모델은 스레드 안전하지 않으므로 실행기를 하나로 두어 모델 호출이 겹치지 않게 한다.
 - 이미 닫힌 연결로 결과를 보내다 실패하면 조용히 무시한다.
 - 설정 `server/.env`: `TOKEN`, `ALLOWED_ORIGINS`(기본 `https://lumos0107.github.io`), 테스트용 `AUTH_TIMEOUT`(기본 3초). 개발용 `http://localhost:5500`은 `.env.example`에 예시로만 둔다.
-- `run.ps1` — Funnel 켜기 → 가상환경으로 uvicorn 실행(`--host 127.0.0.1 --port 8000 --ws-max-size 2097152 --log-level warning`) → 종료 시 Funnel 끄기
+- `run.ps1` — Funnel 켜기 → 가상환경으로 uvicorn 실행(`--host 127.0.0.1 --port 18080 --ws-max-size 2097152 --log-level warning`) → 종료 시 Funnel 끄기
+- 설정 `MODEL` (선택): 다른 자세 가중치 파일(예: `yolo11s-pose.pt`)을 쓸 때. 가중치는 pickle로 불러오므로 **신뢰하는 출처의 파일만** 쓴다.
 
 ### 도구 (`tools/`)
 - `stream_video.py` — 동영상 파일을 프레임 단위로 `/ws`에 보내 fps·인원을 출력 (카메라 없이 전체 경로 검증)
@@ -145,12 +148,15 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
 ## 7. 파일 구조
 
 ```
-index.html  app.js  style.css      프런트
-server/app.py  server/requirements.txt  server/.env.example  server/run.ps1
-server/tests/test_ws.py
-tools/stream_video.py  tools/gen_token.py  tools/webcam_pose.py
-design/
-.gitignore                          .venv/ *.pt .env 영상·사진 파일
+index.html  app.js  lib.js  face.js  style.css     화면 (Pages가 저장소 루트를 배포)
+vendor/mediapipe/                                   얼굴 윤곽용 MediaPipe (제3자, 수정 금지, SOURCE.md·SHA256SUMS)
+server/app.py config.py sessions.py imaging.py pose.py   백엔드
+server/run.ps1  server/requirements*.txt  server/.env.example
+server/tests/                                       pytest (단위·WebSocket·통합·도구)
+web_tests/                                          Node 테스트 (lib.js, face.js 상태 머신)
+tools/e2e_browser.py serve_page.py stream_video.py gen_token.py webcam_pose.py
+design/                                             설계·계획·검토·기록 문서
+.gitignore                                          .venv/ *.pt .env* 영상·사진 파일
 ```
 
 공개 저장소이므로 토큰(`.env`), 모델 가중치, 테스트 중 찍은 영상·사진, 팀원 개인정보는 올리지 않는다.

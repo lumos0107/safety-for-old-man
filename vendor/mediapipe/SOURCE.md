@@ -2,6 +2,8 @@
 
 얼굴 윤곽 표시(설계 `design/2026-09-30-face-outline-design.md`)에 쓰는 MediaPipe 파일이다. 실행 중에 외부에서 받지 않도록 저장소에 함께 둔다.
 라이선스: Apache License 2.0 — 사본은 같은 폴더의 `LICENSE` (출처 https://github.com/google-ai-edge/mediapipe/blob/master/LICENSE). 파일은 수정하지 않았다.
+얼굴 모델(`face_landmarker.task` = 얼굴 탐지 BlazeFace short-range + Face Mesh V2)의 라이선스 근거는 모델 카드다 — 두 카드 모두 "LICENSED UNDER Apache License, Version 2.0" (2026-09-30 확인):
+[Face Mesh V2 모델 카드](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf) · [BlazeFace short-range 모델 카드](https://storage.googleapis.com/mediapipe-assets/MediaPipe%20BlazeFace%20Model%20Card%20(Short%20Range).pdf)
 
 | 파일 | 출처 | 크기(바이트) | SHA-256 |
 |---|---|---|---|
