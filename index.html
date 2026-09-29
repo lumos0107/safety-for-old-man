@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' wss: ws://localhost:* ws://127.0.0.1:*; img-src 'self' blob:; media-src 'self' blob:">
+        content="default-src 'self'; base-uri 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' wss: ws://localhost:* ws://127.0.0.1:*; img-src 'self' blob:; media-src 'self' blob:">
   <title>눈길손길 자세 인식 시제품</title>
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
@@ -26,7 +26,7 @@
   <p id="notice" class="notice" role="status"></p>
   <p id="face-notice" class="notice" role="status"></p>
   <p class="legend"><b class="lg-left">파랑</b> 왼쪽 · <b class="lg-right">주황</b> 오른쪽 · <b class="lg-trunk">노랑</b> 몸통 · <b class="lg-face">분홍</b> 얼굴</p>
-  <p id="hint" class="hint">실시간 표시에서는 뼈대가 조금 늦게 따라옵니다. 정확히 겹쳐 보려면 표시 방식을 '동기'로 바꾸세요. 영상은 저장되지 않습니다.</p>
+  <p id="hint" class="hint">실시간 표시에서는 뼈대가 조금 늦게 따라옵니다. 정확히 겹쳐 보려면 표시 방식을 '동기'로 바꾸세요. 영상은 설정한 서버(개발 PC)로 보내 뼈대만 계산하고 저장하지 않습니다.</p>
 
   <footer class="controls">
     <button id="start" class="primary">시작</button>
@@ -43,7 +43,10 @@
                placeholder="https://&lt;pc이름&gt;.&lt;tailnet&gt;.ts.net">
       </label>
       <label>토큰
-        <input id="token" type="password" autocomplete="off" spellcheck="false">
+        <span class="token-row">
+          <input id="token" type="password" autocomplete="off" spellcheck="false">
+          <button type="button" id="token-show" aria-label="토큰 보기">보기</button>
+        </span>
       </label>
       <label class="check">
         <input id="face-toggle" type="checkbox">

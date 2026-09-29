@@ -144,7 +144,8 @@ def assert_no_face_data_sent(page) -> None:
     """서버로 간 텍스트 메시지는 auth와 {type:frame, seq}뿐이어야 한다 — 얼굴 좌표·개수가 섞이면 실패."""
     for raw in page.evaluate("() => window.__sent"):
         msg = json.loads(raw)
-        ok = (msg.get("type") == "auth" and set(msg) == {"type", "token"}) or              (msg.get("type") == "frame" and set(msg) == {"type", "seq"})
+        ok = ((msg.get("type") == "auth" and set(msg) == {"type", "token"})
+              or (msg.get("type") == "frame" and set(msg) == {"type", "seq"}))
         assert ok, f"서버로 예상 밖 메시지: {raw[:120]}"
 
 
@@ -300,6 +301,7 @@ def face_checks(p, tmp: Path, shots: Path) -> None:
         except AssertionError:
             pass
         found = page.locator("#faces").text_content()
+        assert found != "-", "먼 얼굴 페이지에서 얼굴 모델이 뜨지 않음"
         if found == "0":  # 못 잡으면 가까이 대라는 안내가 떠야 한다
             expect(page.locator("#face-notice")).to_contain_text("가까이", timeout=10_000)
         far_errors += [f"CSP: {v}" for v in csp_violations(page)]
@@ -354,7 +356,19 @@ def main() -> None:
             page.goto(PAGE)
             status = page.locator("#status")
             expect(status).to_have_text("설정 필요")
-            step("설정 없으면 '설정 필요'")
+            expect(page.locator("#hint")).to_contain_text("서버")  # 영상이 서버로 간다는 고지
+            step("설정 없으면 '설정 필요', 첫 화면에 영상 전송 고지")
+
+            page.click("#settings-btn")
+            size = page.evaluate("() => getComputedStyle(document.getElementById('server-url')).fontSize")
+            assert size == "16px", f"입력칸 글자 {size} — 아이폰이 화면을 확대한다"
+            expect(page.locator("#token")).to_have_attribute("type", "password")
+            page.click("#token-show")
+            expect(page.locator("#token")).to_have_attribute("type", "text")
+            page.click("#token-show")
+            expect(page.locator("#token")).to_have_attribute("type", "password")
+            page.click("#settings-cancel")
+            step("설정 입력칸 16px(아이폰 확대 방지), 토큰 보기 전환")
 
             # 폰 키보드의 "이동"처럼 토큰 칸에서 Enter로 저장한다. 앞뒤 공백이 붙은 토큰.
             page.click("#settings-btn")
@@ -397,6 +411,18 @@ def main() -> None:
             expect(status).to_have_text("연결됨", timeout=30_000)
             step("카메라 전환 직후 정지해도 카메라가 꺼짐")
 
+            page.evaluate("""() => {
+              const track = window.__streams.at(-1).getVideoTracks()[0];
+              track.stop();
+              track.dispatchEvent(new Event('ended'));
+            }""")
+            expect(status).to_have_text("정지", timeout=5_000)
+            expect(page.locator("#notice")).to_contain_text("카메라가 꺼졌")
+            assert page.evaluate(LIVE_TRACKS) == 0
+            page.click("#start")
+            expect(status).to_have_text("연결됨", timeout=30_000)
+            step("연결 중 카메라가 끊기면 '연결됨'으로 빈 프레임을 보내지 않고 멈춤·안내")
+
             page2 = context.new_page()
             watch(page2, errors)
             page2.goto(PAGE)
@@ -432,6 +458,7 @@ def main() -> None:
                 page.click("#start")
                 expect(status).to_have_text("연결 중")
                 expect(status).to_have_text("서버 꺼짐", timeout=15_000)
+                expect(page.locator("#notice")).to_contain_text("주소")  # 한 번도 연결된 적 없으면 주소 확인 안내
             finally:
                 hole.close()
             page.click("#start")  # 정지
@@ -441,6 +468,28 @@ def main() -> None:
             if errors:
                 raise SystemExit(f"페이지 오류: {errors}")
             step("페이지 오류·콘솔 오류·CSP 위반 없음")
+
+            other = context.new_page()  # 서버 허용 목록에 없는 주소(127.0.0.1)로 연 페이지
+            other.goto(f"http://127.0.0.1:{PAGE_PORT}/")
+            configure(other, TOKEN)
+            other.click("#start")
+            expect(other.locator("#status")).to_have_text("허용되지 않은 주소", timeout=15_000)
+            expect(other.locator("#notice")).to_contain_text("ALLOWED_ORIGINS")
+            other.close()
+            step("허용되지 않은 주소면 원인(ALLOWED_ORIGINS) 안내")
+
+            wide = browser.new_context(viewport={"width": 844, "height": 390})
+            wide.add_init_script(PROBE)
+            wpage = wide.new_page()
+            wpage.goto(PAGE)
+            configure(wpage, TOKEN)
+            wpage.click("#start")
+            expect(wpage.locator("#status")).to_have_text("연결됨", timeout=30_000)
+            wpage.wait_for_timeout(1500)
+            wpage.screenshot(path=str(args.shots / "5_landscape.png"))
+            stage_h = wpage.evaluate("() => document.getElementById('stage').clientHeight")
+            wide.close()
+            print(f"기록  가로 844x390에서 영상 영역 높이 {stage_h}px", flush=True)
             browser.close()
 
             face_checks(p, tmp, args.shots)

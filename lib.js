@@ -22,6 +22,13 @@ export function closePolicy(code) {
   return { retry: true, status: STATUS.OFFLINE };
 }
 
+// 연속 실패가 이만큼이면 멈춘다 — 서버가 없을 때 카메라·화면 켜짐이 밤새 유지되지 않게 (약 3분)
+export const MAX_RETRIES = 12;
+
+export function shouldGiveUp(attempt) {
+  return attempt >= MAX_RETRIES;
+}
+
 export function retryDelayMs(attempt) {
   return Math.min(3000 * 2 ** attempt, 10000);
 }

@@ -9,7 +9,7 @@
 
 ## 대상
 
-- 저장소: `C:\Users\seungjun\Documents\claude_code\capston_iecc\vision_proto` (현재 체크아웃된 브랜치의 HEAD)
+- 저장소: 이 저장소의 루트 (평가를 맡긴 쪽이 경로를 알려 준다) (현재 체크아웃된 브랜치의 HEAD)
 - 구조와 목적: `README.md`, `design/개발_경위와_결정_기록.md`, 설계 `design/2026-09-29-web-pose-design.md`, `design/2026-09-30-face-outline-design.md`
 - 이미 받아들인 결정(다시 따지지 않음): 개발용 구조(영상을 PC 서버로 전송), 토큰 하나가 방어선, 새 연결이 이전 연결을 대체, 얼굴 윤곽은 브라우저 계산·기본 끔·SIMD 판만, MediaPipe 사용 통계는 CSP로 차단, 얼굴 탐지 거리 한계(얼굴이 화면 폭의 약 1/5 이상)
 

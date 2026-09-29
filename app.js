@@ -1,5 +1,5 @@
 import {
-  STATUS, closePolicy, retryDelayMs, normalizeServerUrl, cleanToken,
+  STATUS, closePolicy, retryDelayMs, shouldGiveUp, normalizeServerUrl, cleanToken,
   fitContain, scaleToLongSide, visibleSegments, visiblePoints, ema, COLORS, outlineToCanvas, frameErrorText,
 } from "./lib.js";
 import { createFaceTracker } from "./face.js";
@@ -27,9 +27,15 @@ const KEY_FACE = "pose.face";
 const FACE_LOADING = "얼굴 모델 불러오는 중…";
 const FACE_FAR = "얼굴을 찾지 못했습니다. 얼굴이 화면 폭의 1/5 이상 되도록 카메라를 가까이 대세요.";
 const FACE_FAR_AFTER_MS = 3000;
+const SENT = " 영상은 설정한 서버(개발 PC)로 보내 뼈대만 계산하고 저장하지 않습니다.";
 const HINTS = {
-  live: "실시간 표시에서는 뼈대가 조금 늦게 따라옵니다. 정확히 겹쳐 보려면 표시 방식을 '동기'로 바꾸세요. 영상은 저장되지 않습니다.",
-  sync: "동기 표시: 서버에 보낸 그 프레임 위에 결과를 그려 정확히 겹칩니다. 영상은 끊겨 보일 수 있습니다. 영상은 저장되지 않습니다.",
+  live: "실시간 표시에서는 뼈대가 조금 늦게 따라옵니다. 정확히 겹쳐 보려면 표시 방식을 '동기'로 바꾸세요." + SENT,
+  sync: "동기 표시: 서버에 보낸 그 프레임 위에 결과를 그려 정확히 겹칩니다. 영상은 끊겨 보일 수 있습니다." + SENT,
+};
+const CLOSE_NOTICES = {
+  [STATUS.BAD_TOKEN]: "토큰이 맞지 않습니다. 설정에서 고친 뒤 다시 시작하세요.",
+  [STATUS.BAD_ORIGIN]: "이 페이지 주소가 서버 허용 목록(server/.env의 ALLOWED_ORIGINS)에 없습니다.",
+  [STATUS.REPLACED]: "다른 기기(또는 탭)가 연결을 가져갔습니다. 다시 시작하면 되찾습니다.",
 };
 const FACE_ERRORS = {
   unsupported: "이 브라우저에서는 얼굴 윤곽을 쓸 수 없습니다. 뼈대는 그대로 동작합니다.",
@@ -47,6 +53,7 @@ const state = {
   starting: false, cameraRequest: 0,
   shownFaces: null, pendingFace: null, // 동기 표시: 보낸 프레임의 얼굴 결과와 그 seq
   faceMissingSince: null, // 얼굴을 못 찾기 시작한 시각 (거리 안내용)
+  everConnected: false, // 이번 시작 뒤 한 번이라도 ready를 받았는지 (주소 오타 안내용)
 };
 
 // ---------- 설정 (이 브라우저에만 저장) ----------
@@ -251,6 +258,15 @@ async function startCamera() {
   }
   stopCamera(); // 겹친 요청 사이에 다른 스트림이 들어왔으면 끈다
   state.stream = stream;
+  // 다른 앱이 카메라를 가져가거나 권한이 바뀌어 트랙이 끝나면, 검은 화면을 "연결됨"으로 계속 보내지 않고 멈춘다
+  for (const track of stream.getVideoTracks()) {
+    track.addEventListener("ended", () => {
+      if (state.running && state.stream === stream) {
+        stop();
+        setNotice("카메라가 꺼졌습니다 (다른 앱이 카메라를 쓰거나 권한이 바뀐 경우). 다시 시작하세요.");
+      }
+    });
+  }
   video.srcObject = state.stream;
   await video.play().catch(() => {});
   // 요청한 방향이 아니라 실제로 잡힌 카메라로 판단한다. 값이 없으면(노트북 웹캠 등) 전면으로 본다.
@@ -325,8 +341,16 @@ function connect() {
 }
 
 function scheduleReconnect() {
+  if (shouldGiveUp(state.attempt)) {
+    stop();
+    setStatus(STATUS.OFFLINE, "bad");
+    setNotice("서버에 연결하지 못해 멈췄습니다. 서버 주소와 PC 서버가 켜져 있는지 확인한 뒤 다시 시작하세요.");
+    return;
+  }
   const delay = retryDelayMs(state.attempt++);
-  setNotice(`${delay / 1000}초 뒤 다시 연결합니다.`);
+  setNotice(state.everConnected
+    ? `${delay / 1000}초 뒤 다시 연결합니다.`
+    : `${delay / 1000}초 뒤 다시 연결합니다. 서버 주소와 PC 서버가 켜져 있는지 확인하세요.`);
   clearTimeout(state.retryTimer);
   state.retryTimer = setTimeout(connect, delay);
 }
@@ -342,6 +366,7 @@ function onMessage(ws, ev) {
   if (msg.type === "ready") {
     clearTimeout(state.replyTimer); // 연결 단계 시간 제한 해제
     state.authed = true;
+    state.everConnected = true;
     state.attempt = 0;
     setStatus(STATUS.CONNECTED, "ok");
     setNotice("");
@@ -372,7 +397,7 @@ function onClose(ws, ev) {
   } else {
     stop();
     setStatus(policy.status, "bad");
-    setNotice(policy.status === STATUS.BAD_TOKEN ? "토큰이 맞지 않습니다. 설정에서 고친 뒤 다시 시작하세요." : "");
+    setNotice(CLOSE_NOTICES[policy.status] ?? "");
   }
 }
 
@@ -456,6 +481,7 @@ async function start() {
   }
   state.running = true;
   state.attempt = 0;
+  state.everConnected = false;
   $("start").textContent = "정지";
   resetStats();
   requestWakeLock();
@@ -481,6 +507,8 @@ function openSettings() {
   const s = loadSettings();
   $("server-url").value = s.url;
   $("token").value = s.token;
+  $("token").type = "password"; // 열 때마다 다시 가린다
+  $("token-show").textContent = "보기";
   $("face-toggle").checked = loadFace();
   $("settings-error").textContent = "";
   if (!$("settings").open) $("settings").showModal();
@@ -488,6 +516,14 @@ function openSettings() {
 
 // 취소는 submit 버튼이 아니어야 한다: 폼의 기본(첫) submit 버튼이 되면 키보드 Enter·"이동"이 취소로 처리된다
 $("settings-cancel").addEventListener("click", () => $("settings").close());
+
+// 43자 토큰을 폰에 붙여 넣은 뒤 확인할 수 있게
+$("token-show").addEventListener("click", () => {
+  const input = $("token");
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  $("token-show").textContent = show ? "숨김" : "보기";
+});
 
 $("settings-form").addEventListener("submit", (e) => {
   const url = $("server-url").value.trim();

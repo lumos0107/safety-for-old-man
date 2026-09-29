@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   CLOSE, STATUS, closePolicy, retryDelayMs, normalizeServerUrl, cleanToken,
   fitContain, scaleToLongSide, SKELETON, toCanvas, visibleSegments, visiblePoints, ema,
-  COLORS, pointColor, segmentColor, FACE_OVAL, faceOutline, pickOutline, outlineToCanvas, frameErrorText,
+  COLORS, pointColor, segmentColor, FACE_OVAL, faceOutline, pickOutline, outlineToCanvas, frameErrorText, MAX_RETRIES, shouldGiveUp,
 } from "../lib.js";
 
 test("재연결하지 않는 종료 코드", () => {
@@ -160,4 +160,15 @@ test("프레임 오류 코드는 한국어 안내로", () => {
   assert.equal(frameErrorText("bad_message"), "서버가 메시지를 이해하지 못했습니다.");
   assert.equal(frameErrorText("server_error"), "서버 계산 중 오류가 났습니다.");
   assert.equal(frameErrorText("something_new"), "프레임 오류 (something_new)");
+});
+
+test("재시도 상한: 연속 실패가 MAX_RETRIES번이면 멈춘다 (카메라·화면 켜짐이 무한히 유지되지 않게)", () => {
+  assert.equal(MAX_RETRIES, 12);
+  assert.equal(shouldGiveUp(0), false);
+  assert.equal(shouldGiveUp(MAX_RETRIES - 1), false);
+  assert.equal(shouldGiveUp(MAX_RETRIES), true);
+  // 연결 시간 제한 8초 + 재시도 간격 합이 약 3분 — 서버를 잠깐 껐다 켜는 정도는 기다린다
+  let total = 0;
+  for (let a = 0; a < MAX_RETRIES; a++) total += 8000 + retryDelayMs(a);
+  assert.ok(total > 120_000 && total < 300_000, `총 대기 ${total}ms`);
 });
