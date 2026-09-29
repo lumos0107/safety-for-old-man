@@ -123,3 +123,15 @@ export function visiblePoints(kpts, rect, minConf) {
 export function ema(prev, sample, alpha = 0.2) {
   return prev == null ? sample : prev + alpha * (sample - prev);
 }
+
+// MediaPipe 얼굴 메시 478점 중 윤곽(face oval) 36점. 이 순서로 이으면 닫힌 윤곽선이 된다 (이마 가운데 → 오른쪽 → 턱 → 왼쪽).
+export const FACE_OVAL = [
+  10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377,
+  152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
+];
+
+// landmarks: MediaPipe 결과 {x, y, z}[] (0~1 비율). 화면 밖 좌표도 자르지 않는다 — 캔버스가 잘라 윤곽이 납작해지지 않게.
+export function faceOutline(landmarks, rect) {
+  if (!Array.isArray(landmarks) || landmarks.length < 478) return [];
+  return FACE_OVAL.map((i) => toCanvas([landmarks[i].x, landmarks[i].y], rect));
+}

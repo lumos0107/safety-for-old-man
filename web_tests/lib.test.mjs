@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   CLOSE, STATUS, closePolicy, retryDelayMs, normalizeServerUrl, cleanToken,
   fitContain, scaleToLongSide, SKELETON, toCanvas, visibleSegments, visiblePoints, ema,
-  COLORS, pointColor, segmentColor,
+  COLORS, pointColor, segmentColor, FACE_OVAL, faceOutline,
 } from "../lib.js";
 
 test("재연결하지 않는 종료 코드", () => {
@@ -113,4 +113,30 @@ test("모든 뼈대 선에 색이 있고, 좌우 색은 서로 구분된다", ()
 test("ema", () => {
   assert.equal(ema(null, 10), 10);
   assert.equal(ema(10, 20, 0.5), 15);
+});
+
+test("얼굴 윤곽 번호: 36개, 중복 없음, 0~477", () => {
+  assert.equal(FACE_OVAL.length, 36);
+  assert.equal(new Set(FACE_OVAL).size, 36);
+  assert.ok(FACE_OVAL.every((i) => Number.isInteger(i) && i >= 0 && i < 478));
+  assert.equal(FACE_OVAL[0], 10);   // 이마 가운데에서 시작
+  assert.equal(FACE_OVAL[18], 152); // 턱 끝
+});
+
+test("faceOutline: MediaPipe {x, y, z} 478개에서 윤곽 36점을 순서대로 화면 좌표로", () => {
+  const landmarks = Array.from({ length: 478 }, (_, i) => ({ x: i / 1000, y: i / 2000, z: 0.1 }));
+  const rect = { x: 10, y: 20, w: 1000, h: 2000 };
+  const out = faceOutline(landmarks, rect);
+  assert.equal(out.length, 36);
+  assert.deepEqual(out[0], [10 + 10, 20 + 10]);     // 10번 점
+  assert.deepEqual(out[35], [10 + 109, 20 + 109]);  // 109번 점
+  assert.deepEqual(out[18], [10 + 152, 20 + 152]);
+});
+
+test("faceOutline: 점이 모자라면 빈 배열, 화면 밖 좌표는 자르지 않음", () => {
+  const rect = { x: 0, y: 0, w: 100, h: 100 };
+  assert.deepEqual(faceOutline([], rect), []);
+  assert.deepEqual(faceOutline(Array.from({ length: 100 }, () => ({ x: 0, y: 0, z: 0 })), rect), []);
+  const outside = Array.from({ length: 478 }, () => ({ x: 1.2, y: -0.1, z: 0 }));
+  assert.deepEqual(faceOutline(outside, rect)[0], [120, -10]);
 });
