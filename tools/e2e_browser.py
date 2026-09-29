@@ -1,0 +1,157 @@
+"""브라우저 종단 검증: 예시 사진을 가짜 카메라로 넣고 로컬 페이지 → 로컬 백엔드 전체를 확인한다.
+
+사용: .venv\\Scripts\\python tools/e2e_browser.py [--shots 스크린샷폴더]
+설치된 Chrome을 쓴다 (playwright 브라우저 내려받기 불필요). 스크린샷은 저장소 밖에 둔다.
+"""
+import argparse
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+from pathlib import Path
+
+import cv2
+from playwright.sync_api import expect, sync_playwright
+from ultralytics.utils import ASSETS
+
+ROOT = Path(__file__).resolve().parents[1]
+TOKEN = "e" * 43
+PAGE_PORT, API_PORT = 5500, 8765
+PAGE = f"http://localhost:{PAGE_PORT}/"
+# 인원 3명 이상. 페이지 CSP가 문자열 평가(wait_for_function)를 막으므로 텍스트 정규식으로 기다린다
+AT_LEAST_3 = re.compile(r"^(?:[3-9]|[1-9]\d+)$")
+
+
+def write_y4m(dst: Path, w: int = 480, h: int = 640, frames: int = 30) -> None:
+    """세로(480x640) 가짜 카메라 영상. 폰을 세운 상황을 흉내낸다."""
+    img = cv2.resize(cv2.imread(str(ASSETS / "bus.jpg")), (w, h))
+    yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV_I420).tobytes()
+    with open(dst, "wb") as f:
+        f.write(f"YUV4MPEG2 W{w} H{h} F30:1 Ip A1:1 C420jpeg\n".encode())
+        for _ in range(frames):
+            f.write(b"FRAME\n" + yuv)
+
+
+def start_api() -> subprocess.Popen:
+    env = {**os.environ, "TOKEN": TOKEN, "ALLOWED_ORIGINS": f"http://localhost:{PAGE_PORT}"}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "--factory", "server.app:build_app", "--host", "127.0.0.1",
+         "--port", str(API_PORT), "--ws-max-size", "2097152", "--log-level", "warning"],
+        cwd=ROOT, env=env)
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{API_PORT}/health", timeout=1)
+            return proc
+        except OSError:
+            time.sleep(0.5)
+    proc.kill()
+    raise SystemExit("백엔드가 뜨지 않음")
+
+
+def stop_proc(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    proc.wait(timeout=15)
+
+
+def step(name: str) -> None:
+    print(f"OK  {name}", flush=True)
+
+
+def people(page) -> int:
+    text = page.locator("#people").text_content() or "-"
+    return int(text) if text.isdigit() else -1
+
+
+def configure(page, token: str) -> None:
+    page.click("#settings-btn")
+    page.fill("#server-url", f"http://127.0.0.1:{API_PORT}")
+    page.fill("#token", token)
+    page.click("#settings button[value=save]")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--shots", type=Path, default=Path(tempfile.gettempdir()) / "e2e_shots")
+    args = ap.parse_args()
+    args.shots.mkdir(parents=True, exist_ok=True)
+
+    tmp = Path(tempfile.mkdtemp())
+    y4m = tmp / "cam.y4m"
+    write_y4m(y4m)
+    web = subprocess.Popen([sys.executable, "-m", "http.server", str(PAGE_PORT), "--bind", "127.0.0.1"],
+                           cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    api = start_api()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="chrome", headless=True, args=[
+                "--use-fake-ui-for-media-stream",
+                "--use-fake-device-for-media-stream",
+                f"--use-file-for-fake-video-capture={y4m}",
+            ])
+            context = browser.new_context(viewport={"width": 390, "height": 844})
+            page = context.new_page()
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(PAGE)
+            status = page.locator("#status")
+            expect(status).to_have_text("설정 필요")
+            step("설정 없으면 '설정 필요'")
+
+            configure(page, f"  {TOKEN}  ")  # 앞뒤 공백이 붙은 토큰
+            page.click("#start")
+            expect(status).to_have_text("연결됨", timeout=30_000)
+            expect(page.locator("#people")).to_have_text(AT_LEAST_3, timeout=30_000)
+            page.screenshot(path=str(args.shots / "1_live.png"))
+            step(f"공백 붙은 토큰으로 연결, 세로 영상에서 {people(page)}명 인식")
+
+            page.click("#mode")
+            page.wait_for_timeout(1000)
+            page.screenshot(path=str(args.shots / "2_sync.png"))
+            expect(page.locator("#stage")).to_have_class(re.compile(r"\bsync\b"))
+            page.click("#mode")
+            step("동기 표시 전환")
+
+            page2 = context.new_page()
+            page2.goto(PAGE)
+            page2.click("#start")
+            expect(page2.locator("#status")).to_have_text("연결됨", timeout=30_000)
+            expect(status).to_have_text("다른 기기에서 사용 중", timeout=10_000)
+            page.wait_for_timeout(5000)
+            expect(status).to_have_text("다른 기기에서 사용 중")
+            expect(page2.locator("#status")).to_have_text("연결됨")
+            expect(page.locator("#start")).to_have_text("시작")
+            page2.close()
+            step("다른 탭이 가져가면 '다른 기기에서 사용 중', 5초간 서로 뺏지 않음")
+
+            page.click("#start")
+            expect(status).to_have_text("연결됨", timeout=30_000)
+            stop_proc(api)
+            expect(status).to_have_text("서버 꺼짐", timeout=15_000)
+            api = start_api()
+            expect(status).to_have_text("연결됨", timeout=60_000)
+            expect(page.locator("#people")).to_have_text(AT_LEAST_3, timeout=30_000)
+            step("서버가 죽었다 살아나면 새로고침 없이 다시 연결")
+
+            configure(page, "wrong-token")
+            expect(status).to_have_text("토큰 확인", timeout=15_000)
+            page.wait_for_timeout(5000)
+            expect(status).to_have_text("토큰 확인")
+            expect(page.locator("#start")).to_have_text("시작")
+            step("틀린 토큰이면 '토큰 확인', 재연결하지 않음")
+
+            if errors:
+                raise SystemExit(f"페이지 오류: {errors}")
+            browser.close()
+    finally:
+        for proc in (api, web):
+            if proc.poll() is None:
+                stop_proc(proc)
+    print(f"전체 통과. 스크린샷: {args.shots}")
+
+
+if __name__ == "__main__":
+    main()
