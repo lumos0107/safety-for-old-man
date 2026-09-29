@@ -20,7 +20,12 @@ def main() -> int:
         print(f"{args.env}가 이미 있습니다. 토큰을 바꾸려면 --force", file=sys.stderr)
         return 1
     token = secrets.token_urlsafe(32)
-    args.env.write_text(f"TOKEN={token}\nALLOWED_ORIGINS=https://lumos0107.github.io\n", encoding="utf-8")
+    origins = "https://lumos0107.github.io"
+    if args.env.exists():  # --force는 토큰만 바꾸고, 직접 추가한 허용 주소(localhost 등)는 남긴다
+        for line in args.env.read_text(encoding="utf-8").splitlines():
+            if line.startswith("ALLOWED_ORIGINS="):
+                origins = line.split("=", 1)[1].strip() or origins
+    args.env.write_text(f"TOKEN={token}\nALLOWED_ORIGINS={origins}\n", encoding="utf-8")
     print(f"{args.env} 작성 완료. 브라우저 설정에 넣을 토큰:")
     print(token)
     return 0

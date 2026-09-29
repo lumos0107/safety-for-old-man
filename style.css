@@ -34,7 +34,8 @@ body {
 .lg-right { color: #fb923c; }
 .lg-trunk { color: #facc15; }
 .lg-face { color: #f472b6; }
-.hint { margin: 6px 12px; color: var(--muted); font-size: 13px; }
+.hint { margin: 6px 12px 0; color: var(--muted); font-size: 13px; }
+.privacy { margin: 4px 12px 6px; color: var(--muted); font-size: 12px; }
 .controls {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
   padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom));
@@ -74,6 +75,7 @@ dialog label.check small { color: var(--muted); }
 @media (orientation: landscape) and (max-height: 500px) {
   .legend, .hint { display: none; }
   .bar { padding-top: 6px; padding-bottom: 6px; }
+  .privacy { margin: 2px 12px; font-size: 11px; } /* 영상 전송 고지는 가로에서도 남긴다 */
   .controls { padding-top: 6px; padding-bottom: 6px; }
   button { min-height: 36px; padding: 6px; }
 }

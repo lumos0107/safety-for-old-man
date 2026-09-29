@@ -13,16 +13,29 @@
 
 ## 서버 (개발 PC)
 
+**준비물:** Windows, NVIDIA GPU와 드라이버(CUDA 12.8 지원), [uv](https://docs.astral.sh/uv/), [Tailscale](https://tailscale.com/download) (설치 후 로그인, 로그인 계정은 2단계 인증 권장), 인터넷 (첫 실행 때 자세 모델 `yolo11n-pose.pt`를 자동으로 받는다 — `*.pt`는 저장소에 없음).
+
+**처음 한 번**
+
 ```powershell
 uv venv --python 3.12 .venv
 uv pip install --python .venv torch torchvision --index-url https://download.pytorch.org/whl/cu128
 uv pip install --python .venv -r server/requirements.txt
-.venv\Scripts\python tools\gen_token.py          # server/.env 생성, 토큰 출력
+.venv\Scripts\python tools\gen_token.py          # server/.env 생성, 폰에 넣을 토큰 출력
+```
+
+첫 `run.ps1` 실행 때 Tailscale이 Funnel·HTTPS 허용 링크를 출력하면 브라우저에서 한 번 허용한다.
+
+**매번**
+
+```powershell
 powershell -ExecutionPolicy Bypass -File server\run.ps1   # Funnel 켜고 서버 실행, Ctrl+C로 둘 다 끔
 ```
 
-창을 그냥 닫았다면 `tailscale funnel status`로 확인하고 `tailscale funnel --https=443 off`.
-토큰이 새었다면 `tools\gen_token.py --force` 후 서버 재시작.
+- 폰에 넣을 **서버 주소**는 실행 창에 나오는 `https://<pc이름>.<tailnet>.ts.net` (또는 `tailscale funnel status`).
+- 이미 서버가 떠 있으면 `run.ps1`은 Tailscale을 건드리기 전에 멈춘다 (두 번째 실행이 첫 서버의 Funnel을 끄지 않게).
+- 창을 그냥 닫았다면 `tailscale funnel status`로 확인하고 `tailscale funnel --https=443 off`.
+- 토큰이 새었다면 `tools\gen_token.py --force` 후 서버 재시작 (허용 주소 설정은 유지된다).
 
 ## 사용 (폰·노트북)
 
@@ -45,3 +58,14 @@ powershell -ExecutionPolicy Bypass -File server\run.ps1   # Funnel 켜고 서버
 node --test "web_tests/*.test.mjs"                  # 프런트 순수 함수
 .venv\Scripts\python -X utf8 tools\e2e_browser.py   # 브라우저 종단 (Chrome 필요)
 ```
+
+종단 검증 중 `ConnectionResetError [WinError 10054]` 트레이스백이 찍힐 수 있다. 테스트가 서버를 일부러 끄고 다시 켜는 단계에서 나는 것으로, 마지막 줄이 "전체 통과"면 문제없다.
+
+## 시연 체크리스트
+
+- 시작 전: PC 절전 끄기, `run.ps1` 실행, 폰에서 페이지를 열어 얼굴 윤곽을 한 번 켜 모델(16MB)을 미리 받아 두기 (행사장 네트워크가 느릴 수 있음).
+- 프로젝터에 폰 화면을 비출 때 설정 창의 토큰 "보기"를 누르지 않는다. 토큰이 드러났으면 끝난 뒤 `gen_token.py --force`.
+- 전신 뼈대(멀리서)와 얼굴 윤곽(가까이서)은 거리 한계 때문에 한 장면에 같이 보여 주기 어렵다 — 순서를 나눠 시연한다.
+- 촬영 대상자 동의. 화면 아래 안내대로 영상은 서버(개발 PC)로 전송되지만 저장하지 않는다고 설명한다.
+- 끝나면 PC 창에서 Ctrl+C (Funnel도 함께 꺼짐).
+

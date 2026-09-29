@@ -27,10 +27,10 @@ const KEY_FACE = "pose.face";
 const FACE_LOADING = "얼굴 모델 불러오는 중…";
 const FACE_FAR = "얼굴을 찾지 못했습니다. 얼굴이 화면 폭의 1/5 이상 되도록 카메라를 가까이 대세요.";
 const FACE_FAR_AFTER_MS = 3000;
-const SENT = " 영상은 설정한 서버(개발 PC)로 보내 뼈대만 계산하고 저장하지 않습니다.";
+// 영상 전송 고지는 표시 방식 안내와 따로 둔다 (#privacy) — 가로 화면에서 안내를 숨겨도 고지는 남도록
 const HINTS = {
-  live: "실시간 표시에서는 뼈대가 조금 늦게 따라옵니다. 정확히 겹쳐 보려면 표시 방식을 '동기'로 바꾸세요." + SENT,
-  sync: "동기 표시: 서버에 보낸 그 프레임 위에 결과를 그려 정확히 겹칩니다. 영상은 끊겨 보일 수 있습니다." + SENT,
+  live: "실시간 표시에서는 뼈대가 조금 늦게 따라옵니다. 정확히 겹쳐 보려면 표시 방식을 '동기'로 바꾸세요.",
+  sync: "동기 표시: 서버에 보낸 그 프레임 위에 결과를 그려 정확히 겹칩니다. 영상은 끊겨 보일 수 있습니다.",
 };
 const CLOSE_NOTICES = {
   [STATUS.BAD_TOKEN]: "토큰이 맞지 않습니다. 설정에서 고친 뒤 다시 시작하세요.",
@@ -269,6 +269,12 @@ async function startCamera() {
   }
   video.srcObject = state.stream;
   await video.play().catch(() => {});
+  // ended 처리기는 실행 중(running)일 때만 멈추므로, 시작하는 도중에 이미 끝난 트랙은 여기서 걸러 낸다
+  if (stream.getVideoTracks().some((t) => t.readyState === "ended")) {
+    if (request === state.cameraRequest) stopCamera();
+    setNotice("카메라가 꺼졌습니다 (다른 앱이 카메라를 쓰거나 권한이 바뀐 경우). 다시 시작하세요.");
+    return false;
+  }
   // 요청한 방향이 아니라 실제로 잡힌 카메라로 판단한다. 값이 없으면(노트북 웹캠 등) 전면으로 본다.
   const facing = state.stream.getVideoTracks()[0]?.getSettings().facingMode;
   stage.classList.toggle("mirror", (facing || "user") === "user");
@@ -283,11 +289,18 @@ function stopCamera() {
 
 // ---------- 화면 꺼짐 방지 ----------
 async function requestWakeLock() {
+  let lock = null;
   try {
-    state.wakeLock = (await navigator.wakeLock?.request("screen")) ?? null;
+    lock = (await navigator.wakeLock?.request("screen")) ?? null;
   } catch {
-    state.wakeLock = null; // 지원하지 않거나 거부되면 무시
+    return; // 지원하지 않거나 거부되면 무시
   }
+  if (!state.running) { // 요청이 끝나기 전에 정지했으면 바로 푼다 — 화면이 꺼지지 않은 채 남지 않게
+    lock?.release().catch(() => {});
+    return;
+  }
+  state.wakeLock?.release().catch(() => {});
+  state.wakeLock = lock;
 }
 function releaseWakeLock() {
   state.wakeLock?.release().catch(() => {});
@@ -549,6 +562,7 @@ $("settings-form").addEventListener("submit", (e) => {
     }
   } else {
     setStatus(STATUS.IDLE, "wait");
+    setNotice(""); // 멈춘 뒤 남아 있던 안내(토큰 오류·재시도 멈춤 등)를 지운다
   }
   applyFace();
 });

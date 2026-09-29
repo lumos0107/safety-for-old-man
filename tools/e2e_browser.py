@@ -113,7 +113,30 @@ window.WebSocket = class extends NativeWS {
 window.__streams = [];
 const md = navigator.mediaDevices;
 const gum = md.getUserMedia.bind(md);
-md.getUserMedia = async (c) => { const s = await gum(c); window.__streams.push(s); return s; };
+md.getUserMedia = async (c) => {
+  const s = await gum(c);
+  window.__streams.push(s);
+  if (window.__endNextTrack) {  // 시작하는 도중 카메라를 빼앗긴 상황 흉내
+    window.__endNextTrack = false;
+    s.getVideoTracks().forEach((t) => t.stop());
+  }
+  return s;
+};
+"""
+# 요청이 1초 늦게 끝나는 가짜 Wake Lock — 잡힌 잠금 수를 센다
+FAKE_WAKE_LOCK = """
+window.__locksActive = 0;
+Object.defineProperty(navigator, "wakeLock", { configurable: true, value: {
+  request: () => new Promise((resolve) => setTimeout(() => {
+    window.__locksActive++;
+    resolve({ release: async () => { window.__locksActive--; } });
+  }, 1000)),
+}});
+"""
+# 타이머를 20배 빠르게 — 재시도 상한(약 3분)을 몇 초 만에 확인
+FAST_TIMERS = """
+const nativeSetTimeout = window.setTimeout;
+window.setTimeout = (fn, ms, ...args) => nativeSetTimeout(fn, (ms || 0) / 20, ...args);
 """
 LIVE_TRACKS = "() => window.__streams.flatMap(s => s.getTracks()).filter(t => t.readyState === 'live').length"
 
@@ -356,7 +379,7 @@ def main() -> None:
             page.goto(PAGE)
             status = page.locator("#status")
             expect(status).to_have_text("설정 필요")
-            expect(page.locator("#hint")).to_contain_text("서버")  # 영상이 서버로 간다는 고지
+            expect(page.locator("#privacy")).to_contain_text("서버")  # 영상이 서버로 간다는 고지
             step("설정 없으면 '설정 필요', 첫 화면에 영상 전송 고지")
 
             page.click("#settings-btn")
@@ -423,6 +446,18 @@ def main() -> None:
             expect(status).to_have_text("연결됨", timeout=30_000)
             step("연결 중 카메라가 끊기면 '연결됨'으로 빈 프레임을 보내지 않고 멈춤·안내")
 
+            page.click("#start")  # 정지
+            expect(status).to_have_text("정지")
+            page.evaluate("() => { window.__endNextTrack = true; }")
+            page.click("#start")
+            expect(page.locator("#notice")).to_contain_text("카메라가 꺼졌", timeout=10_000)
+            page.wait_for_timeout(2000)
+            expect(status).not_to_have_text("연결됨")
+            assert page.evaluate(LIVE_TRACKS) == 0
+            page.click("#start")
+            expect(status).to_have_text("연결됨", timeout=30_000)
+            step("시작하는 도중 카메라를 빼앗겨도 '연결됨'으로 빈 프레임을 보내지 않음")
+
             page2 = context.new_page()
             watch(page2, errors)
             page2.goto(PAGE)
@@ -452,6 +487,11 @@ def main() -> None:
             expect(page.locator("#start")).to_have_text("시작")
             step("틀린 토큰이면 '토큰 확인', 재연결하지 않음")
 
+            configure(page, TOKEN)  # 멈춘 상태에서 설정을 고쳐 저장
+            expect(status).to_have_text("대기")
+            expect(page.locator("#notice")).to_have_text("")
+            step("멈춘 뒤 설정을 고쳐 저장하면 이전 안내가 지워짐")
+
             hole = blackhole(BLACKHOLE_PORT)
             try:
                 configure(page, TOKEN, port=BLACKHOLE_PORT)
@@ -478,6 +518,40 @@ def main() -> None:
             other.close()
             step("허용되지 않은 주소면 원인(ALLOWED_ORIGINS) 안내")
 
+            locks = browser.new_context(viewport={"width": 390, "height": 844})
+            locks.add_init_script(PROBE)
+            locks.add_init_script(FAKE_WAKE_LOCK)
+            lpage = locks.new_page()
+            lpage.goto(PAGE)
+            configure(lpage, TOKEN)
+            lpage.click("#start")
+            expect(lpage.locator("#start")).to_have_text("정지")
+            lpage.click("#start")  # 화면 꺼짐 방지 요청이 끝나기 전에 정지
+            lpage.wait_for_timeout(2000)
+            held = lpage.evaluate("() => window.__locksActive")
+            locks.close()
+            assert held == 0, f"정지했는데 화면 꺼짐 방지 {held}개가 남음"
+            step("시작 직후 정지해도 화면 꺼짐 방지가 남지 않음")
+
+            fast = browser.new_context(viewport={"width": 390, "height": 844})
+            fast.add_init_script(PROBE)
+            fast.add_init_script(FAST_TIMERS)
+            fpage = fast.new_page()
+            fpage.goto(PAGE)
+            hole = blackhole(BLACKHOLE_PORT)
+            try:
+                configure(fpage, TOKEN, port=BLACKHOLE_PORT)
+                fpage.click("#start")
+                expect(fpage.locator("#notice")).to_contain_text("멈췄습니다", timeout=60_000)
+                expect(fpage.locator("#status")).to_have_attribute("data-kind", "bad")
+                expect(fpage.locator("#start")).to_have_text("시작")
+                assert fpage.evaluate(LIVE_TRACKS) == 0
+                sockets = fpage.evaluate("() => window.__sockets.length")
+            finally:
+                hole.close()
+                fast.close()
+            step(f"서버가 계속 없으면 {sockets}번 시도 뒤 멈추고 카메라를 끔 (타이머 20배속)")
+
             wide = browser.new_context(viewport={"width": 844, "height": 390})
             wide.add_init_script(PROBE)
             wpage = wide.new_page()
@@ -488,6 +562,7 @@ def main() -> None:
             wpage.wait_for_timeout(1500)
             wpage.screenshot(path=str(args.shots / "5_landscape.png"))
             stage_h = wpage.evaluate("() => document.getElementById('stage').clientHeight")
+            expect(wpage.locator("#privacy")).to_be_visible()  # 가로 화면에서도 영상 전송 고지는 보여야 한다
             wide.close()
             print(f"기록  가로 844x390에서 영상 영역 높이 {stage_h}px", flush=True)
             browser.close()

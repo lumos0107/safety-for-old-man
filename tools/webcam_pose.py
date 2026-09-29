@@ -1,6 +1,6 @@
 """웹캠 실시간 사람 검출 + 관절 키포인트(YOLO-Pose) 시험 스크립트.
 
-실행:  .venv\Scripts\python webcam_pose.py [--cam 0] [--model yolo11n-pose.pt]
+실행:  .venv\Scripts\python tools\webcam_pose.py [--cam 0] [--model yolo11n-pose.pt]
 종료:  q 또는 ESC
 영상은 저장하지 않는다 (화면 표시만).
 """

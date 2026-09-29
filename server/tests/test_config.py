@@ -78,3 +78,14 @@ def test_gen_token_writes_env_and_refuses_overwrite(tmp_path):
     assert run_gen("--env", str(env), "--force").returncode == 0
     new = dict(line.split("=", 1) for line in env.read_text(encoding="utf-8").splitlines())
     assert new["TOKEN"] != lines["TOKEN"]  # --force는 토큰을 실제로 교체한다
+
+
+def test_gen_token_force_keeps_allowed_origins(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("TOKEN=" + "o" * 43 + "\nALLOWED_ORIGINS=https://lumos0107.github.io,http://localhost:5500\n",
+                   encoding="utf-8")
+    assert run_gen("--env", str(env), "--force").returncode == 0
+    lines = dict(line.split("=", 1) for line in env.read_text(encoding="utf-8").splitlines())
+    assert lines["TOKEN"] != "o" * 43
+    assert lines["ALLOWED_ORIGINS"] == "https://lumos0107.github.io,http://localhost:5500"  # 토큰만 바꾼다
+
