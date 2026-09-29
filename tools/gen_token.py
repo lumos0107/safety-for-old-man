@@ -13,19 +13,25 @@ DEFAULT_ENV = Path(__file__).resolve().parents[1] / "server" / ".env"
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--env", type=Path, default=DEFAULT_ENV)
-    ap.add_argument("--force", action="store_true", help="기존 .env를 덮어쓴다 (토큰 교체)")
+    ap.add_argument("--force", action="store_true", help="기존 .env의 TOKEN만 새로 바꾼다 (다른 줄은 그대로)")
     args = ap.parse_args()
 
     if args.env.exists() and not args.force:
         print(f"{args.env}가 이미 있습니다. 토큰을 바꾸려면 --force", file=sys.stderr)
         return 1
-    token = secrets.token_urlsafe(32)
-    origins = "https://lumos0107.github.io"
-    if args.env.exists():  # --force는 토큰만 바꾸고, 직접 추가한 허용 주소(localhost 등)는 남긴다
-        for line in args.env.read_text(encoding="utf-8").splitlines():
-            if line.startswith("ALLOWED_ORIGINS="):
-                origins = line.split("=", 1)[1].strip() or origins
-    args.env.write_text(f"TOKEN={token}\nALLOWED_ORIGINS={origins}\n", encoding="utf-8")
+    token_line = f"TOKEN={secrets.token_urlsafe(32)}"
+    if args.env.exists():
+        # TOKEN 줄만 바꾸고 주석·허용 주소·MODEL 같은 다른 줄은 형식까지 그대로 둔다
+        lines = args.env.read_text(encoding="utf-8").splitlines()
+        at = next((i for i, line in enumerate(lines) if line.split("=", 1)[0].strip() == "TOKEN"), None)
+        if at is None:
+            lines.insert(0, token_line)
+        else:
+            lines[at] = token_line
+    else:
+        lines = [token_line, "ALLOWED_ORIGINS=https://lumos0107.github.io"]
+    args.env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    token = token_line.split("=", 1)[1]
     print(f"{args.env} 작성 완료. 브라우저 설정에 넣을 토큰:")
     print(token)
     return 0

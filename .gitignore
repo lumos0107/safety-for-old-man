@@ -3,8 +3,9 @@
 __pycache__/
 .pytest_cache/
 
-# 비밀값
-.env
+# 비밀값 (.env.bak 같은 백업도) — 예시 파일만 추적
+.env*
+!.env.example
 
 # 모델 가중치
 *.pt
@@ -17,3 +18,12 @@ __pycache__/
 *.jpg
 *.jpeg
 *.png
+*.webm
+*.webp
+*.heic
+*.heif
+*.mkv
+*.m4v
+*.gif
+*.bmp
+*.y4m

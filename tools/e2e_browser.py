@@ -361,7 +361,8 @@ def main() -> None:
     tmp = Path(tempfile.mkdtemp())
     y4m = tmp / "cam.y4m"
     write_y4m(y4m)
-    web = subprocess.Popen([sys.executable, "-m", "http.server", str(PAGE_PORT), "--bind", "127.0.0.1"],
+    # 화면 파일만 내주는 서버 — http.server는 저장소 루트를 통째로 내줘 server/.env(실제 토큰)가 열린다
+    web = subprocess.Popen([sys.executable, str(ROOT / "tools" / "serve_page.py"), str(PAGE_PORT)],
                            cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     api = start_api()
     try:

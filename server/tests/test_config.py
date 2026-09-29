@@ -89,3 +89,30 @@ def test_gen_token_force_keeps_allowed_origins(tmp_path):
     assert lines["TOKEN"] != "o" * 43
     assert lines["ALLOWED_ORIGINS"] == "https://lumos0107.github.io,http://localhost:5500"  # 토큰만 바꾼다
 
+
+def test_gen_token_force_keeps_every_other_line(tmp_path):
+    env = tmp_path / ".env"
+    original = ("# 팀 메모: 로컬 개발용 주소 포함\n"
+                "ALLOWED_ORIGINS = https://lumos0107.github.io,http://localhost:5500\n"
+                "TOKEN=" + "o" * 43 + "\n"
+                "MODEL=yolo11s-pose.pt\n"
+                "AUTH_TIMEOUT=5\n")
+    env.write_text(original, encoding="utf-8")
+    assert run_gen("--env", str(env), "--force").returncode == 0
+    after = env.read_text(encoding="utf-8").splitlines()
+    before = original.splitlines()
+    assert len(after) == len(before)
+    for old, new in zip(before, after):
+        if old.startswith("TOKEN="):
+            assert new.startswith("TOKEN=") and new != old and len(new) >= 6 + 43
+        else:
+            assert new == old  # 주석·공백 형식·다른 설정을 그대로 둔다
+
+
+def test_gen_token_force_adds_token_line_when_missing(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("ALLOWED_ORIGINS=https://lumos0107.github.io\n", encoding="utf-8")
+    assert run_gen("--env", str(env), "--force").returncode == 0
+    lines = env.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("TOKEN=") and lines[1] == "ALLOWED_ORIGINS=https://lumos0107.github.io"
+
