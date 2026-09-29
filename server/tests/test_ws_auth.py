@@ -157,3 +157,18 @@ def test_replacement_log_mentions_same_device_reconnect(make_client, caplog):
         with authed(client):
             pass
     assert "같은 기기의 재접속이면 정상" in caplog.text
+    assert "밀려난 이전 기기" in caplog.text  # 안내가 뜨는 곳은 새 기기가 아니라 밀려난 쪽
+
+
+def test_printable_escapes_control_and_non_ascii():
+    from server.app import _printable
+    raw = "a" + chr(0x1b) + chr(0x7f) + chr(0xac00) + chr(0x85) + chr(9)
+    assert _printable(raw) == "a\\x1b\\x7f\\uac00\\x85\\t"
+    assert _printable("x" * 200) == "x" * 80
+
+
+def test_origin_refusal_hint_says_restart_and_unknown_stays(make_client, caplog):
+    caplog.set_level("WARNING", logger="pose")
+    with make_client() as client, client.websocket_connect("/ws", headers={"origin": "https://evil.example"}) as ws:
+        assert closed_with(ws) == 4003
+    assert "서버 재시작" in caplog.text and "모르는 주소면 그대로" in caplog.text

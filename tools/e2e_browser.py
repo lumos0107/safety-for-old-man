@@ -532,7 +532,7 @@ def main() -> None:
                 page.click("#start")
                 expect(status).to_have_text("연결 중")
                 expect(status).to_have_text("서버 꺼짐", timeout=15_000)
-                expect(page.locator("#notice")).to_contain_text("주소")  # 한 번도 연결된 적 없으면 주소 확인 안내
+                expect(page.locator("#notice")).to_contain_text("서버 주소가 맞는지")  # 한 번도 연결된 적 없으면 주소 확인 안내
             finally:
                 hole.close()
             page.click("#start")  # 정지
@@ -549,6 +549,7 @@ def main() -> None:
             other.click("#start")
             expect(other.locator("#status")).to_have_text("허용되지 않은 주소", timeout=15_000)
             expect(other.locator("#notice")).to_contain_text("ALLOWED_ORIGINS")
+            expect(other.locator("#notice")).to_contain_text("다시 시작")  # 고친 뒤 서버 재시작해야 반영
             other.close()
             step("허용되지 않은 주소면 원인(ALLOWED_ORIGINS) 안내")
 

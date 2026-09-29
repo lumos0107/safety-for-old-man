@@ -34,7 +34,7 @@ const HINTS = {
 };
 const CLOSE_NOTICES = {
   [STATUS.BAD_TOKEN]: "토큰이 맞지 않습니다. 설정에서 고친 뒤 다시 시작하세요.",
-  [STATUS.BAD_ORIGIN]: "이 페이지 주소가 서버 허용 목록(server/.env의 ALLOWED_ORIGINS)에 없습니다.",
+  [STATUS.BAD_ORIGIN]: "이 페이지 주소가 서버 허용 목록(server/.env의 ALLOWED_ORIGINS)에 없습니다. 고쳤다면 PC 서버를 다시 시작해야 반영됩니다.",
   [STATUS.REPLACED]: "다른 기기(또는 탭)가 연결을 가져갔습니다. 다시 시작하면 되찾습니다.",
 };
 const FACE_ERRORS = {
@@ -362,13 +362,13 @@ function scheduleReconnect() {
   if (shouldGiveUp(state.attempt)) {
     stop();
     setStatus(STATUS.OFFLINE, "bad");
-    setNotice("서버에 연결하지 못해 멈췄습니다. 서버 주소와 PC 서버가 켜져 있는지 확인한 뒤 다시 시작하세요.");
+    setNotice("서버에 연결하지 못해 멈췄습니다. 서버 주소가 맞는지, PC 서버가 켜져 있는지 확인한 뒤 다시 시작하세요.");
     return;
   }
   const delay = retryDelayMs(state.attempt++);
   setNotice(state.everConnected
     ? `${delay / 1000}초 뒤 다시 연결합니다.`
-    : `${delay / 1000}초 뒤 다시 연결합니다. 서버 주소와 PC 서버가 켜져 있는지 확인하세요.`);
+    : `${delay / 1000}초 뒤 다시 연결합니다. 서버 주소가 맞는지, PC 서버가 켜져 있는지 확인하세요.`);
   clearTimeout(state.retryTimer);
   state.retryTimer = setTimeout(connect, delay);
 }

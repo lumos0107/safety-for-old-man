@@ -42,10 +42,14 @@ def main() -> int:
         print(f"토큰이 적용되지 않아 {args.env}를 바꾸지 않았습니다: TOKEN 줄이 여러 개이거나 "
               "'export TOKEN=' 형식입니다. TOKEN 줄을 하나(TOKEN=...)로 정리한 뒤 다시 실행하세요.", file=sys.stderr)
         return 1
+    replacing = args.env.exists()
     args.env.write_text(text, encoding="utf-8")
     if os.environ.get("TOKEN"):
         print("주의: 환경변수 TOKEN이 설정돼 있어 서버는 .env 대신 그 값을 씁니다.", file=sys.stderr)
-    print(f"{args.env} 작성 완료. 서버를 다시 시작하고, 각 폰 설정에 새 토큰을 넣으세요:")
+    if replacing:
+        print(f"{args.env}의 토큰을 바꿨습니다. 서버를 다시 시작하고, 각 폰 설정에 새 토큰을 넣으세요:")
+    else:
+        print(f"{args.env} 작성 완료. 폰 설정에 넣을 토큰:")
     print(token)
     return 0
 

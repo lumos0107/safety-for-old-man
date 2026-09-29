@@ -33,8 +33,9 @@ def _note(message: str) -> None:
 
 
 def _printable(text: str, limit: int = 80) -> str:
-    """상대가 보낸 문자열을 로그에 넣을 때: 길이 제한 + 비ASCII·제어문자 이스케이프."""
-    return text[:limit].encode("ascii", "backslashreplace").decode("ascii")
+    """상대가 보낸 문자열을 로그에 넣을 때: 길이 제한 + 출력 가능한 ASCII(32~126) 밖은 모두 이스케이프.
+    (ASCII 제어문자는 지금 uvicorn이 HTTP 층에서 거부하지만, 그 외부 보장에 기대지 않는다 — 합의 R3-9)"""
+    return "".join(c if 32 <= ord(c) < 127 else ascii(c)[1:-1] for c in text[:limit])
 
 
 class _Summarizer:
@@ -107,11 +108,11 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
     token = settings.token.encode()
     # 틀린 토큰은 상대가 토큰을 모른다는 뜻이다 — 유출 신호가 아니다 (README '서버 창 로그 읽는 법')
     auth_failures = _Summarizer(
-        lambda why: f"인증 실패 ({why}) — 옛 토큰이나 스캐너, 토큰은 안전",
+        lambda why: f"인증 실패 ({why}) — 토큰을 모르는 접속(옛 토큰·스캐너 등), 토큰은 안전",
         lambda n, since, why: f"{since}부터 인증 실패 {n}건 더 (최근: {why}) — 토큰은 안전",
     )
     origin_refusals = _Summarizer(
-        lambda o: f"허용되지 않은 주소에서 접속 거부: {o} (server/.env의 ALLOWED_ORIGINS 확인)",
+        lambda o: f"허용되지 않은 주소에서 접속 거부: {o} (팀이 연 페이지라면 server/.env의 ALLOWED_ORIGINS에 더하고 서버 재시작 — 모르는 주소면 그대로 둔다)",
         lambda n, since, o: f"{since}부터 허용되지 않은 주소 거부 {n}건 더 (최근: {o})",
     )
     note_failure = auth_failures.hit
@@ -133,7 +134,7 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
         try:
             msg = await asyncio.wait_for(ws.receive(), timeout=settings.auth_timeout)
         except asyncio.TimeoutError:
-            note_failure("시간 초과")
+            note_failure("시간 초과 — 인증 없이 연결만")
             await _close(ws, CLOSE_AUTH_TIMEOUT)
             return False
         if msg["type"] == "websocket.disconnect":
@@ -214,7 +215,7 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
                 await _close(ws, CLOSE_EVICTED)
                 return
             if previous is not None:
-                _note("인증 성공 — 이전 연결 대체 (같은 기기의 재접속이면 정상 / 다른 기기라면 그 기기에 '다른 기기에서 사용 중'이 뜸)")
+                _note("인증 성공 — 이전 연결 대체 (같은 기기의 재접속이면 정상 / 다른 기기가 붙었다면 밀려난 이전 기기에 '다른 기기에서 사용 중'이 뜸)")
                 await _close(previous, CLOSE_REPLACED)
             else:
                 _note("인증 성공 — 기기 연결됨")

@@ -31,6 +31,7 @@ body {
 .notice:empty { display: none; }
 .legend { margin: 8px 12px 0; color: var(--muted); font-size: 13px; }
 .legend b { font-weight: 700; }
+.legend .pair { white-space: nowrap; } /* 색과 뜻이 다른 줄로 갈리지 않게 */
 .lg-left { color: #38bdf8; }   /* lib.js COLORS와 같은 값 */
 .lg-right { color: #fb923c; }
 .lg-trunk { color: #facc15; }
