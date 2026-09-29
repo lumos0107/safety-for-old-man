@@ -1,5 +1,7 @@
 # 웹 카메라 자세 인식 시제품 구현 계획
 
+> **구현 당시(2026-09-29) 기록이다.** 지금의 명령·포트는 README가 기준이다 — 서버 포트는 18080(당시 8000), 로컬 화면은 `tools/serve_page.py`로 띄운다. 이 문서의 `python -m http.server`는 **쓰지 않는다** (저장소 전체를 내줘 `server/.env`의 토큰이 열림).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 폰·노트북 브라우저 카메라 영상을 이 PC의 GPU(YOLO11n-pose)로 보내 관절 17개를 인식하고, 브라우저 화면에 뼈대를 겹쳐 그린다.

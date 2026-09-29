@@ -9,7 +9,7 @@
 - 페이지: https://lumos0107.github.io/safety-for-old-man/
 - 설계: [자세 인식](design/2026-09-29-web-pose-design.md) · [얼굴 윤곽](design/2026-09-30-face-outline-design.md) · [개발 경위와 결정 기록](design/개발_경위와_결정_기록.md) · [평가·보완 기록](design/2026-09-30-evaluation-rounds.md) · [3인 합의 점검 기록](design/2026-09-30-consensus-rounds.md)
 
-> **보안 주의 — 페이지 주소를 다른 사이트와 함께 씀 (결정 필요):** GitHub Pages는 한 계정의 모든 저장소가 같은 출처(`https://lumos0107.github.io`)를 쓰고, 브라우저 저장소(localStorage)는 출처별이다. 이 계정에는 지금 이 저장소 말고도 Pages 사이트가 4개(abang-log-presentation, HealthAge, inventory-app, web-practice-2026) 있어, 그중 한 곳에 스크립트 결함이 생기면 폰에 저장된 토큰·서버 주소를 읽거나 바꿀 수 있다 (가능성은 낮지만 영향은 촬영 영상 유출). 권장: 이 페이지를 **전용 GitHub Organization으로 옮긴다** (옮기면 페이지 주소가 바뀌고, `ALLOWED_ORIGINS`를 새 주소로 바꾼 뒤 `gen_token.py --force`로 토큰을 교체, 폰마다 설정을 다시 넣는다). 대안: 다른 4개 사이트의 Pages를 끈다.
+> **보안 주의 — 페이지 주소를 다른 사이트와 함께 씀 (결정 필요):** GitHub Pages는 한 계정의 모든 저장소가 같은 출처(`https://lumos0107.github.io`)를 쓰고, 브라우저 저장소(localStorage)는 출처별이다. 이 계정에는 지금 이 저장소 말고도 Pages 사이트가 4개(abang-log-presentation, HealthAge, inventory-app, web-practice-2026) 있어, 그중 한 곳에 스크립트 결함이 생기면 폰에 저장된 토큰·서버 주소를 읽거나 바꿀 수 있다 (가능성은 낮지만 영향은 촬영 영상 유출). 권장: 이 페이지를 **전용 GitHub Organization으로 옮긴다** (옮기면 페이지 주소가 바뀐다: `server/.env`의 `ALLOWED_ORIGINS`와 함께 `git grep lumos0107`로 나오는 곳 — `server/config.py` 기본값, `tools/gen_token.py`, `server/.env.example`, README 링크, 테스트 상수 — 도 새 주소로 바꾸고, 토큰을 교체(아래 '토큰 교체')한 뒤 폰마다 설정을 다시 넣는다. 옛 주소의 브라우저 저장소에 옛 토큰이 남기 때문). 대안: 다른 4개 사이트의 Pages를 끈다.
 
 ## 서버 (개발 PC)
 
@@ -32,12 +32,16 @@ uv pip install --python .venv -r server/requirements.txt
 powershell -ExecutionPolicy Bypass -File server\run.ps1   # Funnel 켜고 서버 실행, Ctrl+C로 둘 다 끔
 ```
 
-- 창에 **"서버 준비 완료"**가 뜨면 폰에서 시작한다 (모델을 불러오느라 몇 초, 첫 실행은 더 걸린다).
+- 창에 "**서버 준비 완료**"가 뜨면 폰에서 시작한다 (모델을 불러오느라 몇 초, 첫 실행은 더 걸린다).
 - 폰에 넣을 **서버 주소**는 실행 창에 나오는 `https://<pc이름>.<tailnet>.ts.net` (또는 `tailscale funnel status`). 서버는 이 PC 안의 18080번 포트(흔한 개발 포트를 피함)에서 돌고, 폰 주소에는 포트가 없다.
-- 서버 창에는 준비 완료, 인증 성공·연결 대체, 허용되지 않은 주소 거부, 인증 실패(1분 요약)가 시각과 함께 한 줄씩 나온다. 토큰·영상·접속 IP는 남기지 않는다. 인증 실패가 계속 늘면 토큰 유출·스캔을 의심하고 토큰을 바꾼다.
+- 서버 창에는 준비 완료, 인증 성공·연결 대체, 허용되지 않은 주소 거부, 인증 실패가 시각과 함께 나온다 (거부·실패는 첫 건은 바로, 이어지는 건은 1분마다 "N건 더"로 모음). 토큰·영상·접속 IP는 남기지 않는다.
+- **서버 창 로그 읽는 법:**
+  - "인증 실패" = 틀린 토큰(옛 토큰을 가진 기기, 스캐너). 상대가 토큰을 모른다는 뜻이라 **토큰은 안전**하다.
+  - "이전 연결 대체" = 새 연결이 이전 연결을 밀어냄. 폰이 와이파이↔LTE로 바뀌어 **같은 폰이 다시 붙을 때도** 찍히므로 그 자체로는 정상이다.
+  - **유출을 의심할 때:** 팀이 아무도 시작하지 않았는데 "인증 성공"이 찍히거나, 시연 폰에 "다른 기기에서 사용 중"이 뜰 때 → 아래 '토큰 교체'. 판단 기준은 서버 창보다 시연 폰 화면이다.
 - 이미 서버가 "서버 준비 완료"까지 떠 있으면 `run.ps1`은 Tailscale을 건드리기 전에 멈춘다. 첫 서버가 모델을 불러오는 동안에는 이 검사로 못 막으니 두 창을 띄우지 않는다.
 - **창을 그냥 닫았거나 PC가 재부팅·전원 차단된 뒤에는** `tailscale funnel status`로 확인하고, 켜져 있으면 `tailscale funnel --https=443 off`. (남아 있으면 이 PC의 18080번에 다른 프로그램을 띄웠을 때 그것이 인터넷에 공개된다.)
-- 토큰이 새었다면 `tools\gen_token.py --force` 후 서버 재시작 (TOKEN 줄만 바뀌고 다른 설정은 그대로).
+- **토큰 교체:** `.venv\Scripts\python tools\gen_token.py --force` → 서버 재시작(Ctrl+C 후 `run.ps1`) → 각 폰 설정에 새 토큰(`server/.env`의 `TOKEN=` 뒤 값). TOKEN 줄만 바뀌고 다른 설정은 그대로이며, TOKEN 줄이 여러 개면 바꾸지 않고 알려 준다.
 - 서버는 Ultralytics의 사용 통계 전송을 끈 상태로 돈다 (`server/pose.py`).
 
 ## 사용 (폰·노트북)
@@ -73,7 +77,9 @@ powershell -ExecutionPolicy Bypass -File server\run.ps1   # Funnel 켜고 서버
 
 `main`에 push하면 1~10분 안에 **시연 페이지가 바로 바뀐다** (Pages 캐시 최대 10분). 그래서:
 
-1. 로컬 확인: `server/.env`의 `ALLOWED_ORIGINS`에 `,http://localhost:5500`을 더하고 서버를 켠 뒤, `.venv\Scripts\python tools\serve_page.py`로 화면만 띄워 `http://localhost:5500/`에서 확인한다. (`python -m http.server`는 저장소 전체를 내줘 `server/.env`의 토큰이 열리므로 쓰지 않는다.)
+1. 로컬 확인: `server/.env`의 `ALLOWED_ORIGINS`에 `,http://localhost:5500`을 더하고 서버를 켠 뒤, `.venv\Scripts\python tools\serve_page.py`로 화면만 띄워 `http://localhost:5500/`을 연다. 설정의 서버 주소는 `http://localhost:18080`(이 PC 안이라 Funnel이 필요 없음), 토큰은 `server/.env` 값. (`python -m http.server`는 저장소 전체를 내줘 `server/.env`의 토큰이 열리므로 쓰지 않는다.)
+   - 카메라가 없는 PC면 영상이 까맣거나 "카메라를 찾을 수 없습니다"가 뜬다 — 로컬에서는 배치·연결·문구만 확인하고, 뼈대는 브라우저 종단 검증(가짜 카메라)이나 웹캠 있는 노트북으로 본다.
+   - 확인이 끝나면 `ALLOWED_ORIGINS`에서 `localhost:5500`을 다시 뺀다.
 2. `node --test "web_tests/*.test.mjs"`와 브라우저 종단 검증을 통과한 뒤 push.
 3. **시연 전날부터는 `main`에 push하지 않는다.**
 
@@ -94,7 +100,7 @@ node --test "web_tests/*.test.mjs"                  # 프런트 순수 함수·�
 - **전날:** 폰에서 설정 → 얼굴 윤곽 켬 → 저장 → **시작** → 상단 "얼굴" 칸이 `-`에서 숫자로 바뀔 때까지 기다린다 (서버 없이도 됨, 이때 16MB를 받는다). 저장만 하고 시작하지 않으면 받지 않는다. 당일 시작 전에 한 번 더 확인한다 (캐시가 지워졌을 수 있음). 전날부터 `main` push 금지.
 - **시작 전:** PC 절전 끄기, `run.ps1` 실행 → "서버 준비 완료" 확인.
 - **한 기기만:** 시연 중에는 다른 팀원 기기·탭에서 시작하지 않는다 (새 연결이 시연 폰을 밀어내고, 밀려난 폰은 스스로 되찾지 않는다).
-- **순서:** 전신 뼈대는 얼굴 윤곽을 끈 채 멀리서 → 얼굴 시연 전에 설정에서 켜고 가까이. 설정 창에는 서버 주소가 보이므로 **프로젝터에 비치지 않는 순간에 연다.** 토큰 "보기"는 누르지 않는다. 토큰이 드러났으면 끝난 뒤 `gen_token.py --force`.
+- **순서:** 전신 뼈대는 얼굴 윤곽을 끈 채 멀리서 → 얼굴 시연 전에 설정에서 켜고 가까이. 설정 창에는 서버 주소가 보이므로 **프로젝터에 비치지 않는 순간에 연다.** 토큰 "보기"는 누르지 않는다. 토큰이 드러났으면 끝난 뒤 위 '토큰 교체'.
 - 촬영 대상자 동의. 화면 아래 안내대로 영상은 서버(개발 PC)로 전송되지만 저장하지 않는다고 설명한다.
 - 끝나면 PC 창에서 Ctrl+C (Funnel도 함께 꺼짐).
 
