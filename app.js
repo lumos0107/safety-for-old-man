@@ -1,7 +1,8 @@
 import {
   STATUS, closePolicy, retryDelayMs, normalizeServerUrl, cleanToken,
-  fitContain, scaleToLongSide, visibleSegments, visiblePoints, ema,
+  fitContain, scaleToLongSide, visibleSegments, visiblePoints, ema, COLORS, faceOutline,
 } from "./lib.js";
+import { createFaceTracker } from "./face.js";
 
 const JPEG_QUALITY = 0.7;
 const MAX_SIDE = 640;
@@ -18,8 +19,18 @@ const capture = document.createElement("canvas"); // 전송할 프레임
 const cctx = capture.getContext("2d");
 const shown = document.createElement("canvas");   // 마지막 결과를 만든 프레임 (동기 표시용)
 const sctx = shown.getContext("2d");
+const full = document.createElement("canvas");    // 원본 크기 프레임 (동기 표시 + 얼굴 윤곽일 때만)
+const fctx = full.getContext("2d");
 const KEY_URL = "pose.serverUrl";
 const KEY_TOKEN = "pose.token";
+const KEY_FACE = "pose.face";
+const FACE_LOADING = "얼굴 모델 불러오는 중…";
+const FACE_ERRORS = {
+  unsupported: "이 브라우저에서는 얼굴 윤곽을 쓸 수 없습니다. 뼈대는 그대로 동작합니다.",
+  timeout: "얼굴 모델을 30초 안에 불러오지 못해 얼굴 윤곽을 껐습니다.",
+  load: "얼굴 모델을 불러오지 못해 얼굴 윤곽을 껐습니다.",
+  runtime: "얼굴 윤곽 계산이 멈춰 껐습니다.",
+};
 
 const state = {
   running: false, facing: "environment", mode: "live",
@@ -28,6 +39,7 @@ const state = {
   lastResult: null, lastResultAt: null, fps: null,
   stream: null, wakeLock: null,
   starting: false, cameraRequest: 0,
+  shownFaces: null, pendingFace: null, // 동기 표시: 보낸 프레임의 얼굴 결과와 그 seq
 };
 
 // ---------- 설정 (이 브라우저에만 저장) ----------
@@ -44,6 +56,21 @@ function saveSettings(url, token) {
     localStorage.setItem(KEY_TOKEN, token);
   } catch {
     setNotice("브라우저 저장소를 쓸 수 없어 설정이 저장되지 않았습니다.");
+  }
+}
+// 얼굴 윤곽은 기본 끔 (시연용). 켜도 얼굴 좌표는 이 기기에서만 쓴다.
+function loadFace() {
+  try {
+    return localStorage.getItem(KEY_FACE) === "1";
+  } catch {
+    return false;
+  }
+}
+function saveFace(on) {
+  try {
+    localStorage.setItem(KEY_FACE, on ? "1" : "0");
+  } catch {
+    /* 저장소를 못 쓰면 이번 화면에서만 적용 */
   }
 }
 function hasSettings() {
@@ -65,6 +92,7 @@ function resetStats() {
   $("fps").textContent = "-";
   $("ms").textContent = "-";
   $("people").textContent = "-";
+  $("faces").textContent = "-";
 }
 
 function draw() {
@@ -78,9 +106,33 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, bw, bh);
   const r = state.lastResult;
+  // 윤곽은 뼈대 결과와 따로 그린다: 실시간 표시에서는 서버 연결 전·재연결 중에도 나온다.
+  // 동기 표시에서는 보낸 프레임에 맞춰야 하므로 결과가 있을 때만 (서버가 끊기면 윤곽도 멈춤).
+  const faces = !face.enabled ? null : state.mode === "sync" ? (r ? state.shownFaces : null) : face.live;
+  $("faces").textContent = faces ? String(faces.length) : "-";
   const rect = fitContain(video.videoWidth, video.videoHeight, bw, bh);
-  if (!r || !rect) return;
-  if (state.mode === "sync") ctx.drawImage(shown, rect.x, rect.y, rect.w, rect.h);
+  if (!rect) return;
+  if (state.mode === "sync" && r) ctx.drawImage(shown, rect.x, rect.y, rect.w, rect.h);
+  if (r) drawPeople(r, rect);
+  if (faces) drawFaces(faces, rect);
+}
+
+function drawFaces(faces, rect) {
+  ctx.strokeStyle = COLORS.face;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  for (const landmarks of faces) {
+    const pts = faceOutline(landmarks, rect);
+    if (!pts.length) continue;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+    ctx.closePath();
+    ctx.stroke();
+  }
+}
+
+function drawPeople(r, rect) {
   for (const p of r.people) {
     const [x1, y1, x2, y2] = p.box;
     ctx.strokeStyle = "rgba(255, 255, 255, 0.55)"; // 좌우 색과 겹치지 않게 박스는 흰색
@@ -109,6 +161,34 @@ function draw() {
 
 function clearOverlay() {
   state.lastResult = null;
+  state.shownFaces = null;
+  state.pendingFace = null;
+  draw();
+}
+
+// ---------- 얼굴 윤곽 (face.js) ----------
+const face = createFaceTracker({
+  onUpdate(kind) {
+    if (kind === "loading") setNotice(FACE_LOADING);
+    if (kind === "ready" && $("notice").textContent === FACE_LOADING) setNotice("");
+    draw();
+  },
+  onError(code) {
+    saveFace(false); // 체크박스도 끔으로 되돌린다
+    setNotice(FACE_ERRORS[code] ?? FACE_ERRORS.load);
+    draw();
+  },
+});
+
+// 설정·실행 상태·표시 방식에 맞춰 얼굴 계산을 켜고 끈다. 카메라가 켜져 있을 때만 계산한다.
+function applyFace() {
+  const want = loadFace() && state.running;
+  if (want) face.setSource(state.mode === "live" ? video : null);
+  if (want !== face.enabled) face.setEnabled(want);
+  if (!want) {
+    state.shownFaces = null;
+    state.pendingFace = null;
+  }
   draw();
 }
 
@@ -286,10 +366,19 @@ async function pump() {
     setTimeout(pump, 100);
     return;
   }
+  // 동기 표시에서 얼굴 윤곽을 계산할 때는 원본 크기 프레임을 한 번 그리고 거기서 전송 이미지를 만든다 (같은 순간)
+  const syncFace = state.mode === "sync" && face.ready;
+  let source = video;
+  if (syncFace) {
+    full.width = video.videoWidth;
+    full.height = video.videoHeight;
+    fctx.drawImage(video, 0, 0);
+    source = full;
+  }
   const { w, h } = scaleToLongSide(video.videoWidth, video.videoHeight, MAX_SIDE);
   capture.width = w;
   capture.height = h;
-  cctx.drawImage(video, 0, 0, w, h);
+  cctx.drawImage(source, 0, 0, w, h);
   const seq = ++state.seq;
   state.waitingSeq = seq;
   const blob = await new Promise((resolve) => capture.toBlob(resolve, "image/jpeg", JPEG_QUALITY));
@@ -302,6 +391,8 @@ async function pump() {
   ws.send(JSON.stringify({ type: "frame", seq }));
   ws.send(blob);
   state.replyTimer = setTimeout(onReplyTimeout, REPLY_TIMEOUT_MS);
+  // 서버 응답을 기다리는 동안 같은 프레임의 얼굴을 계산해 둔다 (응답 뒤에 계산하면 표시가 그만큼 늦는다)
+  state.pendingFace = syncFace ? { seq, faces: face.detectNow(full) } : null;
 }
 
 function onResult(r) {
@@ -313,7 +404,8 @@ function onResult(r) {
   shown.width = capture.width;
   shown.height = capture.height;
   sctx.drawImage(capture, 0, 0);
-  setNotice(""); // 앞선 프레임 오류 안내 지우기
+  state.shownFaces = state.pendingFace?.seq === r.seq ? state.pendingFace.faces : null;
+  if ($("notice").textContent !== FACE_LOADING) setNotice(""); // 앞선 프레임 오류 안내 지우기
   $("fps").textContent = state.fps == null ? "-" : state.fps.toFixed(1);
   $("ms").textContent = r.infer_ms.toFixed(1);
   $("people").textContent = String(r.people.length);
@@ -341,6 +433,7 @@ async function start() {
   resetStats();
   requestWakeLock();
   connect();
+  applyFace();
 }
 
 function stop() {
@@ -350,6 +443,7 @@ function stop() {
   detachSocket();
   stopCamera();
   releaseWakeLock();
+  applyFace();
   clearOverlay();
   setStatus(STATUS.STOPPED, "wait");
 }
@@ -359,6 +453,7 @@ function openSettings() {
   const s = loadSettings();
   $("server-url").value = s.url;
   $("token").value = s.token;
+  $("face-toggle").checked = loadFace();
   $("settings-error").textContent = "";
   if (!$("settings").open) $("settings").showModal();
 }
@@ -379,14 +474,19 @@ $("settings-form").addEventListener("submit", (e) => {
     $("settings-error").textContent = "토큰을 입력하세요.";
     return;
   }
+  const before = loadSettings();
   saveSettings(url, token);
+  saveFace($("face-toggle").checked);
   if (state.running) {
-    detachSocket();
-    state.attempt = 0;
-    connect();
+    if (before.url !== url || before.token !== token) { // 서버 설정이 바뀔 때만 다시 연결
+      detachSocket();
+      state.attempt = 0;
+      connect();
+    }
   } else {
     setStatus(STATUS.IDLE, "wait");
   }
+  applyFace();
 });
 
 // ---------- 버튼·이벤트 ----------
@@ -396,13 +496,14 @@ $("settings-btn").addEventListener("click", openSettings);
 $("flip").addEventListener("click", async () => {
   state.facing = state.facing === "user" ? "environment" : "user";
   if (state.running && !(await startCamera())) stop();
+  else applyFace(); // 새 카메라 영상으로 얼굴 계산을 다시 건다
 });
 
 $("mode").addEventListener("click", () => {
   state.mode = state.mode === "live" ? "sync" : "live";
   $("mode").textContent = state.mode === "live" ? "표시: 실시간" : "표시: 동기";
   stage.classList.toggle("sync", state.mode === "sync");
-  draw();
+  applyFace(); // 실시간이면 영상, 동기면 보낸 프레임을 계산
 });
 
 document.addEventListener("visibilitychange", () => {

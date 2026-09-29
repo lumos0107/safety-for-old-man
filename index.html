@@ -15,6 +15,7 @@
     <span class="stat">fps <b id="fps">-</b></span>
     <span class="stat">처리 <b id="ms">-</b>ms</span>
     <span class="stat">인원 <b id="people">-</b></span>
+    <span class="stat">얼굴 <b id="faces">-</b></span>
   </header>
 
   <main id="stage" class="stage">
@@ -42,6 +43,10 @@
       </label>
       <label>토큰
         <input id="token" type="password" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="check">
+        <input id="face-toggle" type="checkbox">
+        <span>얼굴 윤곽 표시 (시연용)<br><small>이 기기에서만 계산하고 서버로 보내거나 저장하지 않습니다. 처음 켤 때 약 16MB를 받습니다.</small></span>
       </label>
       <p class="small">이 브라우저에만 저장됩니다.</p>
       <p id="settings-error" class="error"></p>

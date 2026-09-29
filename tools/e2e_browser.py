@@ -27,6 +27,24 @@ PAGE = f"http://localhost:{PAGE_PORT}/"
 AT_LEAST_3 = re.compile(r"^(?:[3-9]|[1-9]\d+)$")
 
 
+def write_face_y4m(dst: Path, scale: float = 1.0, frames: int = 30) -> None:
+    """가로 1280x720 가짜 카메라. zidane.jpg 오른쪽 사람을 2배로 확대해 얼굴이 화면 폭의 약 1/5이 되게 한다 (폰을 가까이 든 상황).
+    원본 zidane.jpg(얼굴이 폭의 약 1/10)는 얼굴 탐지기(가까운 거리용)가 잡지 못한다 — 2026-09-30 실측.
+    scale<1이면 줄여서 검은 바탕 가운데에 둔다 (멀리 있는 얼굴 흉내). scale=0.5가 원본 사진의 얼굴 크기와 같다."""
+    w, h = 1280, 720
+    img = cv2.resize(cv2.imread(str(ASSETS / "zidane.jpg"))[0:360, 640:1280], (w, h))
+    if scale < 1:
+        small = cv2.resize(img, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
+        img = img * 0
+        y, x = (h - small.shape[0]) // 2, (w - small.shape[1]) // 2
+        img[y:y + small.shape[0], x:x + small.shape[1]] = small
+    yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV_I420).tobytes()
+    with open(dst, "wb") as f:
+        f.write(f"YUV4MPEG2 W{w} H{h} F30:1 Ip A1:1 C420jpeg\n".encode())
+        for _ in range(frames):
+            f.write(b"FRAME\n" + yuv)
+
+
 def write_y4m(dst: Path, w: int = 480, h: int = 640, frames: int = 30) -> None:
     """세로(480x640) 가짜 카메라 영상. 폰을 세운 상황을 흉내낸다."""
     img = cv2.resize(cv2.imread(str(ASSETS / "bus.jpg")), (w, h))
@@ -102,12 +120,142 @@ def watch(page, errors: list) -> None:
             return
         if "favicon.ico" in (msg.location or {}).get("url", "") or msg.text.startswith("WebSocket connection to"):
             return
+        if msg.text.startswith("INFO: Created TensorFlow Lite XNNPACK delegate"):  # MediaPipe가 정보 메시지를 error로 찍음
+            return
+        if TELEMETRY in msg.text:  # 아래 csp_violations 설명 참고 — 따로 확인한다
+            return
         errors.append(f"console: {msg.text}")
     page.on("console", on_console)
 
 
+# MediaPipe는 모델을 만들 때 사용 통계 기록기를 붙이고 Google로 보내려 한다 (끄는 옵션 없음).
+# 페이지 CSP가 이를 막는 것이 의도된 동작이다 — 얼굴 기능 설계 4장. 이 차단만 예상된 위반으로 분리한다.
+TELEMETRY = "odml.pa.googleapis.com"
+
+
 def csp_violations(page) -> list:
-    return page.evaluate("() => window.__csp")
+    """예상된 텔레메트리 차단을 뺀 CSP 위반."""
+    return [v for v in page.evaluate("() => window.__csp") if TELEMETRY not in v]
+
+
+def telemetry_blocked(page) -> bool:
+    return any(TELEMETRY in v for v in page.evaluate("() => window.__csp"))
+
+
+FACES_AT_LEAST_1 = re.compile(r"^[1-9]\d*$")
+
+
+def launch(p, y4m: Path):
+    return p.chromium.launch(channel="chrome", headless=True, args=[
+        "--use-fake-ui-for-media-stream",
+        "--use-fake-device-for-media-stream",
+        f"--use-file-for-fake-video-capture={y4m}",
+    ])
+
+
+def set_face(page, on: bool, port: int) -> None:
+    page.click("#settings-btn")
+    page.fill("#server-url", f"http://127.0.0.1:{port}")
+    page.fill("#token", TOKEN)
+    if page.is_checked("#face-toggle") != on:
+        page.click("#face-toggle")
+    page.click("#settings button[value=save]")
+
+
+def face_checks(p, tmp: Path, shots: Path) -> None:
+    """얼굴 윤곽 (design/2026-09-30-face-outline-design.md 7장)."""
+    y4m = tmp / "face.y4m"
+    write_face_y4m(y4m)
+    browser = launch(p, y4m)
+    context = browser.new_context(viewport={"width": 390, "height": 844})
+    context.add_init_script(PROBE)
+    page = context.new_page()
+    errors: list = []
+    watch(page, errors)
+    vendor = []
+    page.on("request", lambda r: "vendor/mediapipe" in r.url and vendor.append(r.url))
+    status, faces = page.locator("#status"), page.locator("#faces")
+    page.goto(PAGE)
+
+    hole = blackhole(BLACKHOLE_PORT)
+    try:
+        page.click("#settings-btn")
+        assert not page.is_checked("#face-toggle"), "얼굴 윤곽 기본값이 켬"
+        page.click("#settings-cancel")
+        set_face(page, False, BLACKHOLE_PORT)
+        page.click("#start")
+        page.wait_for_timeout(3000)
+        expect(faces).to_have_text("-")
+        assert not vendor, f"끈 상태에서 MediaPipe 파일 요청: {vendor}"
+        step("얼굴 윤곽 기본 끔, 끈 상태에서는 모델 파일을 받지 않음")
+
+        set_face(page, True, BLACKHOLE_PORT)
+        expect(faces).to_have_text(FACES_AT_LEAST_1, timeout=90_000)
+        expect(status).not_to_have_text("연결됨")
+        step(f"서버 연결 없이도 실시간 표시에 얼굴 윤곽 ({faces.text_content()}개)")
+    finally:
+        hole.close()
+
+    page.click("#start")  # 정지
+    set_face(page, True, API_PORT)
+    page.click("#start")
+    expect(status).to_have_text("연결됨", timeout=30_000)
+    expect(faces).to_have_text(FACES_AT_LEAST_1, timeout=60_000)
+    page.wait_for_timeout(1000)
+    page.screenshot(path=str(shots / "3_face_live.png"))
+    step(f"서버 연결 상태에서 뼈대와 얼굴 윤곽 ({faces.text_content()}개)")
+
+    page.click("#mode")
+    expect(page.locator("#mode")).to_have_text("표시: 동기")
+    page.wait_for_timeout(1500)
+    expect(faces).to_have_text(FACES_AT_LEAST_1, timeout=30_000)
+    page.screenshot(path=str(shots / "4_face_sync.png"))
+    page.click("#mode")
+    step("동기 표시에서도 얼굴 윤곽")
+
+    page.evaluate("""() => {
+      const t = document.getElementById('face-toggle');
+      const f = document.getElementById('settings-form');
+      const save = document.querySelector('#settings button[value=save]');
+      for (let i = 0; i < 11; i++) {
+        document.getElementById('settings').showModal();
+        t.checked = !t.checked;
+        f.requestSubmit(save);
+      }
+    }""")
+    page.wait_for_timeout(3000)
+    expect(faces).to_have_text("-")
+    set_face(page, True, API_PORT)
+    expect(faces).to_have_text(FACES_AT_LEAST_1, timeout=60_000)
+    set_face(page, False, API_PORT)
+    expect(faces).to_have_text("-", timeout=10_000)
+    step("켜기·끄기를 빠르게 반복해도 마지막 상태를 따르고, 다시 켜면 동작")
+
+    errors += [f"CSP: {v}" for v in csp_violations(page)]
+    if errors:
+        raise SystemExit(f"얼굴 윤곽 페이지 오류: {errors}")
+    step("얼굴 윤곽: 페이지 오류·콘솔 오류·CSP 위반 없음"
+         + (" (MediaPipe 사용 통계 전송은 CSP가 차단함)" if telemetry_blocked(page) else ""))
+    browser.close()
+
+    record = []
+    for scale in (0.5, 1 / 3):
+        far = tmp / f"face_{scale:.2f}.y4m"
+        write_face_y4m(far, scale)
+        b = launch(p, far)
+        pg = b.new_context(viewport={"width": 390, "height": 844})
+        pg.add_init_script(PROBE)
+        page = pg.new_page()
+        page.goto(PAGE)
+        set_face(page, True, API_PORT)
+        page.click("#start")
+        try:
+            expect(page.locator("#faces")).to_have_text(FACES_AT_LEAST_1, timeout=30_000)
+        except AssertionError:
+            pass
+        record.append(f"{scale:.2f}배 → 얼굴 {page.locator('#faces').text_content()}")
+        b.close()
+    print("기록  멀리 있는 얼굴 흉내 (1280x720 가운데 배치): " + ", ".join(record), flush=True)
 
 
 def blackhole(port: int) -> socket.socket:
@@ -232,6 +380,8 @@ def main() -> None:
                 raise SystemExit(f"페이지 오류: {errors}")
             step("페이지 오류·콘솔 오류·CSP 위반 없음")
             browser.close()
+
+            face_checks(p, tmp, args.shots)
     finally:
         for proc in (api, web):
             if proc.poll() is None:
