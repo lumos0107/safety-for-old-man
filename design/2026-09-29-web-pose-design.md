@@ -1,7 +1,7 @@
 # 웹 카메라 자세 인식 시제품 설계
 
 작성 2026-09-29 · 팀 눈길손길 (창의융합 캡스톤디자인)
-개정 2026-09-29 · `2026-09-29-web-pose-design-review.md` 반영 (끝의 "검토 반영 기록" 참고)
+개정 2026-09-29 · `2026-09-29-web-pose-design-review.md` 1·2차 검토 반영 (끝의 "검토 반영 기록" 참고)
 
 ## 1. 목적
 
@@ -55,13 +55,15 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
 - **공개 경로 최소화**: `FastAPI(docs_url=None, redoc_url=None, openapi_url=None)`. `GET /health`는 `{"ok": true}`만 돌려준다 (GPU·모델·버전 정보 없음).
 - **연결 수**
   - 인증된 연결은 1개. **새로 인증된 연결이 기존 연결을 대체**하고, 기존 연결은 `4010`으로 닫는다. (거부 방식이면 폰 네트워크가 끊겼다 붙을 때 서버가 아직 살아 있다고 여기는 이전 연결 때문에 재접속이 막힌다.)
-  - 인증 대기 연결은 최대 4개. 초과하면 `4009`로 닫는다.
+  - 인증 대기 연결은 최대 4개, 대기 시간 3초. 초과하면 새 연결을 거부하지 않고 **가장 오래된 인증 대기 연결을 `4009`로 닫는다.** 정상 클라이언트는 연결 직후 바로 인증하므로 토큰 없는 연결을 반복해 열어도 정상 사용자가 막히지 않는다.
 - **크기 제한 (2단계)**
   - uvicorn `--ws-max-size 2097152`(2 MB). 이보다 크면 서버가 연결을 끊는다.
   - 앱: 1 MB 초과는 `too_large` 응답, 연결 유지.
   - 디코딩 전에 PIL `Image.open(...).size`로 헤더상 해상도를 읽고, 긴 변이 2000px를 넘으면 `bad_image`로 거부한다 (압축 폭탄 방지).
 - **로그**: ultralytics는 `verbose=False, save=False`. uvicorn 접속 로그는 `warning` 수준으로 낮춘다. 이미지·토큰은 어떤 로그에도 남기지 않는다.
-- **Funnel은 쓸 때만 켠다**: `server/run.ps1`이 시작할 때 `tailscale funnel --bg 8000`을 켜고, 종료할 때(Ctrl+C 포함) `tailscale funnel --https=443 off`로 끈다.
+- **Funnel은 쓸 때만 켠다**: `server/run.ps1`이 시작할 때 `tailscale funnel --bg 8000`을 켜고, 종료할 때(Ctrl+C) `finally`에서 `tailscale funnel --https=443 off`로 끈다 (설치된 1.102.4에서 동작 확인).
+  - 터미널 창을 닫거나 PC가 꺼지면 `finally`가 실행되지 않아 Funnel이 켜진 채 남는다. 백엔드가 꺼져 있으면 502만 돌아가므로 위험은 낮지만, 9장의 확인 절차로 끈다.
+  - `run.ps1`은 시작할 때 Funnel이 이미 켜져 있으면 그대로 다시 설정하고 진행한다.
 - **촬영 동의**: 팀원·시험 참가자를 촬영하기 전에 동의를 받는다.
 
 ## 5. 통신 규격 (WebSocket `/ws`)
@@ -70,10 +72,11 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
 |---|---|---|
 | 접속 | (Origin 헤더) | 4장 Origin 규칙. 인증 대기 연결이 4개면 `4009` |
 | 인증 | 텍스트 `{"type":"auth","token":"..."}` | 맞으면 `{"type":"ready","model":"yolo11n-pose"}`, 기존 인증 연결은 `4010`으로 닫음. 틀리면 `4001` |
-| | 5초 안에 인증 없음 | `4008` |
+| | 3초 안에 인증 없음 | `4008` |
 | | 인증 전 바이너리 | `4001` |
 | 추론 | 텍스트 `{"type":"frame","seq":N}` 다음 바이너리 JPEG | 아래 `result` |
-| | 인증 후 알 수 없는 텍스트, `frame` 없이 온 바이너리, 다시 온 `auth` | `{"type":"error","code":"bad_message"}`, 연결 유지 |
+| | `frame`이 연속으로 옴 | 나중 것의 `seq`를 쓴다 (응답 없음) |
+| | 인증 후 알 수 없는 텍스트, `frame` 없이 온 바이너리, 다시 온 `auth` | `{"type":"error","code":"bad_message"}`, 연결 유지. 대기 중이던 `frame`은 버린다 |
 | | 1 MB 초과 | `{"type":"error","code":"too_large","seq":N}`, 연결 유지 |
 | | 디코딩 불가·해상도 초과 | `{"type":"error","code":"bad_image","seq":N}`, 연결 유지 |
 
@@ -96,6 +99,8 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
 | `4010` | 다른 기기가 연결을 가져감 | 안 함 — "다른 기기에서 사용 중" 표시 (두 탭이 서로 뺏는 반복 방지) |
 | `4008` · `4009` · 그 외 끊김 | 시간 초과·혼잡·네트워크 | 함 — 3초부터 최대 10초 간격 |
 
+**응답 대기 시간 제한**: 프런트는 `frame`을 보낸 뒤 **5초** 안에 `result`·`error`가 오지 않으면 연결을 스스로 닫고 재연결한다. 폰이 와이파이↔LTE로 바뀔 때 WebSocket이 `close` 없이 멈춰 화면이 굳는 경우와, `seq` 없는 `bad_message`로 대기가 풀리지 않는 경우를 함께 해결한다. 서버에 남은 이전 연결은 새 인증 연결이 대체한다.
+
 ## 6. 구성 요소
 
 ### 프런트 (저장소 루트, GitHub Pages)
@@ -111,14 +116,15 @@ https://<pc이름>.<tailnet>.ts.net/ws                                    ← Ta
 - **좌표 변환**: 영상은 `object-fit: contain`으로 잘리지 않게 표시하고, 캔버스는 영상의 실제 표시 영역에 맞춘다. 전면 카메라의 좌우 반전은 영상과 캔버스를 감싼 요소 하나에 적용해 좌표가 함께 뒤집히게 한다.
 - 키포인트는 신뢰도 0.5 이상만 그린다.
 - 탭이 가려지면(`visibilitychange`) 전송을 멈추고, 돌아오면 재개한다.
-- 전송 중에는 Screen Wake Lock으로 화면 꺼짐을 막는다 (지원하지 않는 브라우저는 무시).
+- 전송 중에는 Screen Wake Lock으로 화면 꺼짐을 막는다 (지원하지 않는 브라우저는 무시). 탭이 가려지면 브라우저가 자동으로 해제하므로 `visibilitychange`로 돌아왔을 때 다시 요청한다.
 - 카메라 권한 거부 시 브라우저 설정에서 허용하는 방법을 안내한다.
 
 ### 백엔드 (`server/`)
 - `app.py` — FastAPI, WebSocket `/ws`, `GET /health`
 - 모델은 시작할 때 한 번 올리고 예열한다. 가중치 `yolo11n-pose.pt`는 저장소에 없으며 첫 실행 때 자동으로 내려받는다.
-- 추론은 스레드로 넘겨 이벤트 루프를 막지 않는다. 인증 연결이 1개뿐이라 GPU 잠금은 두지 않는다.
-- 설정 `server/.env`: `TOKEN`, `ALLOWED_ORIGINS`(기본 `https://lumos0107.github.io,http://localhost:5500`), 테스트용 `AUTH_TIMEOUT`(기본 5초)
+- 추론은 **추론 전용 `ThreadPoolExecutor(max_workers=1)`**로 넘겨 이벤트 루프를 막지 않는다. 인증 연결은 1개지만, 연결이 대체되는 순간 이전 연결의 추론이 아직 스레드에서 돌고 있을 수 있다. ultralytics 모델은 스레드 안전하지 않으므로 실행기를 하나로 두어 모델 호출이 겹치지 않게 한다.
+- 이미 닫힌 연결로 결과를 보내다 실패하면 조용히 무시한다.
+- 설정 `server/.env`: `TOKEN`, `ALLOWED_ORIGINS`(기본 `https://lumos0107.github.io`), 테스트용 `AUTH_TIMEOUT`(기본 3초). 개발용 `http://localhost:5500`은 `.env.example`에 예시로만 둔다.
 - `run.ps1` — Funnel 켜기 → 가상환경으로 uvicorn 실행(`--host 127.0.0.1 --port 8000 --ws-max-size 2097152 --log-level warning`) → 종료 시 Funnel 끄기
 
 ### 도구 (`tools/`)
@@ -147,11 +153,15 @@ Pages가 저장소 루트를 배포하므로 `server/`·`design/`도 웹에서 �
 - 틀린 토큰 → `4001`, 인증 전 바이너리 → `4001`
 - 허용되지 않은 Origin → `4003`, Origin 없음 → 인증 가능
 - 인증 시간 초과 → `4008` (`AUTH_TIMEOUT`을 짧게)
-- 인증 대기 연결 초과 → `4009`
+- 인증 대기 연결 초과 → 가장 오래된 대기 연결이 `4009`로 닫히고 새 연결은 인증 가능
 - 두 번째 인증 연결 → 첫 연결이 `4010`으로 닫힘
 - 1 MB 초과 → `too_large` 후 연결 유지
 - 깨진 이미지, 헤더상 해상도 초과 JPEG → `bad_image` 후 연결 유지
-- 알 수 없는 메시지 → `bad_message`
+- 알 수 없는 메시지 → `bad_message`, `frame` 연속 → 나중 `seq`로 응답
+- 연결 대체 중 모델 호출이 겹치지 않음 (추론 함수에 동시 실행 감지용 카운터를 두고 확인)
+
+통합 (실제 uvicorn을 하위 프로세스로 띄움 — TestClient는 uvicorn을 거치지 않아 `--ws-max-size`를 검증할 수 없다)
+- 2 MB 초과 메시지 → 연결 끊김
 - 예시 사진(`ultralytics.utils.ASSETS / "bus.jpg"`, 저장소에 넣지 않음) → 사람 3명 이상, 사람마다 관절 17개, 좌표 0~1, `seq`·`img_w`·`img_h` 일치
 - `/docs`, `/redoc`, `/openapi.json` → 404, `/health` → `{"ok": true}`
 
@@ -163,6 +173,7 @@ Pages가 저장소 루트를 배포하므로 `server/`·`design/`도 웹에서 �
 
 - Tailscale 로그인 계정(구글)에 2단계 인증
 - 시험할 때 `server/run.ps1` 실행, 끝나면 Ctrl+C (Funnel도 함께 꺼짐)
+- Ctrl+C 대신 창을 닫았거나 PC가 꺼졌다면 `tailscale funnel status`로 확인하고, 켜져 있으면 `tailscale funnel --https=443 off`
 - 촬영 전 대상자 동의
 - 첫 `git push` 때 GitHub 로그인
 
@@ -177,3 +188,14 @@ Pages가 저장소 루트를 배포하므로 `server/`·`design/`도 웹에서 �
 - **4장 `seq`**: 바이너리 앞에 `frame` 텍스트 메시지로 붙인다 (JPEG 바이트에 섞지 않음).
 - **추가**: `4010`은 재연결하지 않는다. 대체 방식에서 두 탭이 서로 연결을 뺏는 반복을 막는다.
 - **5장 지연**: "실시간/동기" 표시 방식 전환으로 대응.
+
+### 2차 검토
+
+10~12장 항목은 모두 반영했다 (11.1 선택 항목 포함).
+
+- **10.1 모델 동시 호출**: 1차 개정의 "GPU 잠금 불필요"는 연결 대체와 모순되는 오류였다. 추론 전용 단일 스레드 실행기로 바꾸고 자동 테스트를 추가했다.
+- **10.2 응답 대기**: 프런트 5초 제한 → 스스로 닫고 재연결.
+- **11.1 인증 대기 제한**: 가장 오래된 대기 연결을 닫고, 대기 시간을 3초로 줄였다.
+- **11.2 Funnel 끄기**: `tailscale funnel --https=443 off`가 설치된 1.102.4에서 동작함을 실제로 확인했다 (`funnel status` → "No serve config"). 창을 닫은 경우의 확인 절차를 9장에 넣었다.
+- **11.3 서버 주소**: 검토는 "이미 커밋된 기록에는 남는다"고 했으나 **아직 push 전이었으므로** 해당 커밋을 고쳐 기록에서도 지웠다 (`a3d824e` → `a9937df`). 검토 문서 11.3의 주소도 같은 이유로 "실제 Funnel 주소"로 바꿨다.
+- **12장**: `--ws-max-size`는 실제 uvicorn 통합 테스트로 자동화했다 (수동 대신). `frame` 연속 시 나중 것 사용, Wake Lock 재요청, `localhost:5500`은 `.env.example`로, `webcam_pose.py`는 구현할 때 `tools/`로 옮긴다.
