@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   CLOSE, STATUS, closePolicy, retryDelayMs, normalizeServerUrl, cleanToken,
   fitContain, scaleToLongSide, SKELETON, toCanvas, visibleSegments, visiblePoints, ema,
-  COLORS, pointColor, segmentColor, FACE_OVAL, faceOutline,
+  COLORS, pointColor, segmentColor, FACE_OVAL, faceOutline, pickOutline, outlineToCanvas,
 } from "../lib.js";
 
 test("재연결하지 않는 종료 코드", () => {
@@ -139,4 +139,17 @@ test("faceOutline: 점이 모자라면 빈 배열, 화면 밖 좌표는 자르�
   assert.deepEqual(faceOutline(Array.from({ length: 100 }, () => ({ x: 0, y: 0, z: 0 })), rect), []);
   const outside = Array.from({ length: 478 }, () => ({ x: 1.2, y: -0.1, z: 0 }));
   assert.deepEqual(faceOutline(outside, rect)[0], [120, -10]);
+});
+
+test("pickOutline: 478점에서 윤곽 36점의 [x, y]만 남긴다 (z와 나머지 점은 버림)", () => {
+  const landmarks = Array.from({ length: 478 }, (_, i) => ({ x: i / 1000, y: i / 2000, z: 0.7 }));
+  const outline = pickOutline(landmarks);
+  assert.equal(outline.length, 36);
+  assert.deepEqual(outline[0], [0.01, 0.005]);
+  assert.ok(outline.every((pt) => pt.length === 2));
+  assert.deepEqual(pickOutline([]), []);
+});
+
+test("outlineToCanvas: 윤곽 36점을 화면 좌표로", () => {
+  assert.deepEqual(outlineToCanvas([[0.5, 0.25], [1.2, -0.1]], { x: 10, y: 20, w: 100, h: 200 }), [[60, 70], [130, 0]]);
 });

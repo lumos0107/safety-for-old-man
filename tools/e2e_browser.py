@@ -231,6 +231,25 @@ def face_checks(p, tmp: Path, shots: Path) -> None:
     expect(faces).to_have_text("-", timeout=10_000)
     step("켜기·끄기를 빠르게 반복해도 마지막 상태를 따르고, 다시 켜면 동작")
 
+    # 서버에 연결된 상태에서 모델 불러오기가 실패해도 안내문이 남아야 한다 (프레임 결과가 지우지 않음)
+    ctx2 = browser.new_context(viewport={"width": 390, "height": 844})  # 캐시가 따로인 새 컨텍스트
+    ctx2.add_init_script(PROBE)
+    failing = ctx2.new_page()
+    failing.route("**/face_landmarker.task", lambda route: route.abort())
+    failing.goto(PAGE)
+    set_face(failing, True, API_PORT)
+    failing.click("#start")
+    expect(failing.locator("#status")).to_have_text("연결됨", timeout=30_000)
+    expect(failing.locator("#face-notice")).to_contain_text("불러오지 못해", timeout=60_000)
+    failing.wait_for_timeout(3000)
+    expect(failing.locator("#face-notice")).to_contain_text("불러오지 못해")
+    expect(failing.locator("#faces")).to_have_text("-")
+    failing.click("#settings-btn")
+    assert not failing.is_checked("#face-toggle"), "실패 뒤 설정이 켬으로 남음"
+    failing.click("#settings-cancel")
+    ctx2.close()
+    step("서버 연결 중 얼굴 모델 불러오기 실패 → 안내문이 남고 설정은 끔으로 돌아감")
+
     errors += [f"CSP: {v}" for v in csp_violations(page)]
     if errors:
         raise SystemExit(f"얼굴 윤곽 페이지 오류: {errors}")

@@ -24,6 +24,7 @@
   </main>
 
   <p id="notice" class="notice" role="status"></p>
+  <p id="face-notice" class="notice" role="status"></p>
   <p class="legend"><b class="lg-left">파랑</b> 왼쪽 · <b class="lg-right">주황</b> 오른쪽 · <b class="lg-trunk">노랑</b> 몸통 · <b class="lg-face">분홍</b> 얼굴</p>
   <p class="hint">실시간 표시에서는 뼈대가 조금 늦게 따라옵니다. 정확히 겹쳐 보려면 표시 방식을 '동기'로 바꾸세요. 영상은 저장되지 않습니다.</p>
 
@@ -46,7 +47,7 @@
       </label>
       <label class="check">
         <input id="face-toggle" type="checkbox">
-        <span>얼굴 윤곽 표시 (시연용)<br><small>이 기기에서만 계산하고 서버로 보내거나 저장하지 않습니다. 처음 켤 때 약 16MB를 받습니다.</small></span>
+        <span>얼굴 윤곽 표시 (시연용)<br><small>얼굴 윤곽 좌표는 이 기기에서만 계산하고 서버로 보내거나 저장하지 않습니다 (영상은 뼈대 계산용으로 기존처럼 서버에 전송). 처음 켤 때 약 16MB를 받습니다.</small></span>
       </label>
       <p class="small">이 브라우저에만 저장됩니다.</p>
       <p id="settings-error" class="error"></p>

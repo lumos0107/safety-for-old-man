@@ -1,6 +1,6 @@
 import {
   STATUS, closePolicy, retryDelayMs, normalizeServerUrl, cleanToken,
-  fitContain, scaleToLongSide, visibleSegments, visiblePoints, ema, COLORS, faceOutline,
+  fitContain, scaleToLongSide, visibleSegments, visiblePoints, ema, COLORS, outlineToCanvas,
 } from "./lib.js";
 import { createFaceTracker } from "./face.js";
 
@@ -86,6 +86,10 @@ function setStatus(text, kind) {
 function setNotice(text) {
   $("notice").textContent = text || "";
 }
+// 얼굴 윤곽 안내는 따로 둔다 — 서버 흐름(프레임 결과·재연결)이 지우지 못하게
+function setFaceNotice(text) {
+  $("face-notice").textContent = text || "";
+}
 function resetStats() {
   state.fps = null;
   state.lastResultAt = null;
@@ -121,8 +125,8 @@ function drawFaces(faces, rect) {
   ctx.strokeStyle = COLORS.face;
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
-  for (const landmarks of faces) {
-    const pts = faceOutline(landmarks, rect);
+  for (const outline of faces) {
+    const pts = outlineToCanvas(outline, rect);
     if (!pts.length) continue;
     ctx.beginPath();
     ctx.moveTo(pts[0][0], pts[0][1]);
@@ -169,13 +173,13 @@ function clearOverlay() {
 // ---------- 얼굴 윤곽 (face.js) ----------
 const face = createFaceTracker({
   onUpdate(kind) {
-    if (kind === "loading") setNotice(FACE_LOADING);
-    if (kind === "ready" && $("notice").textContent === FACE_LOADING) setNotice("");
+    if (kind === "loading") setFaceNotice(FACE_LOADING);
+    if (kind === "ready" || kind === "off") setFaceNotice("");
     draw();
   },
   onError(code) {
     saveFace(false); // 체크박스도 끔으로 되돌린다
-    setNotice(FACE_ERRORS[code] ?? FACE_ERRORS.load);
+    setFaceNotice(FACE_ERRORS[code] ?? FACE_ERRORS.load);
     draw();
   },
 });
@@ -405,7 +409,7 @@ function onResult(r) {
   shown.height = capture.height;
   sctx.drawImage(capture, 0, 0);
   state.shownFaces = state.pendingFace?.seq === r.seq ? state.pendingFace.faces : null;
-  if ($("notice").textContent !== FACE_LOADING) setNotice(""); // 앞선 프레임 오류 안내 지우기
+  setNotice(""); // 앞선 프레임 오류 안내 지우기 (얼굴 안내는 따로라 지우지 않는다)
   $("fps").textContent = state.fps == null ? "-" : state.fps.toFixed(1);
   $("ms").textContent = r.infer_ms.toFixed(1);
   $("people").textContent = String(r.people.length);

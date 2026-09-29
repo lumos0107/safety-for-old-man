@@ -1,6 +1,8 @@
 // 얼굴 윤곽: 브라우저에서 MediaPipe Face Landmarker로 계산한다 (설계 design/2026-09-30-face-outline-design.md).
 // 얼굴 좌표는 이 기기 안에서만 쓰고 서버로 보내거나 저장하지 않는다.
 
+import { pickOutline } from "./lib.js";
+
 const BASE = new URL("./vendor/mediapipe/", import.meta.url);
 const LOAD_TIMEOUT_MS = 30000;
 const MIN_INTERVAL_MS = 1000 / 15; // 초당 계산 상한 15회 — detectForVideo는 동기라 메인 스레드를 막는다
@@ -46,7 +48,8 @@ function safeClose(landmarker) {
 
 // onUpdate(kind): "loading" | "ready" | "result" | "off"
 // onError(code): "unsupported" | "timeout" | "load" | "runtime"
-export function createFaceTracker({ onUpdate, onError }) {
+// load·timeoutMs는 테스트에서 가짜 모델을 넣을 때만 바꾼다 (web_tests/face.test.mjs).
+export function createFaceTracker({ onUpdate, onError, load = loadLandmarker, timeoutMs = LOAD_TIMEOUT_MS }) {
   let enabled = false;
   let landmarker = null;
   let loading = null; // 불러오기 약속은 하나만 — 켜기·끄기를 반복해도 모델을 두 번 만들지 않는다
@@ -57,7 +60,7 @@ export function createFaceTracker({ onUpdate, onError }) {
   let lastRun = 0;
   let lastFrameTime = -1;
   let lastTs = 0;
-  let live = null; // 실시간 표시의 최근 결과 (얼굴마다 {x, y, z}[])
+  let live = null; // 실시간 표시의 최근 결과 (얼굴마다 윤곽 36점 [x, y])
 
   async function setEnabled(on) {
     const my = ++request;
@@ -75,14 +78,19 @@ export function createFaceTracker({ onUpdate, onError }) {
       return;
     }
     onUpdate("loading");
-    if (!loading) loading = loadLandmarker();
+    if (!loading) loading = load();
     const pending = loading;
     let made;
     try {
-      made = await withTimeout(pending, LOAD_TIMEOUT_MS);
+      made = await withTimeout(pending, timeoutMs);
     } catch (e) {
-      if (loading === pending) loading = null;
-      pending.then((late) => { if (late !== landmarker) safeClose(late); }, () => {}); // 시간 초과 뒤 늦게 만들어지면 닫는다
+      // 이 요청 뒤에 같은 불러오기를 기다리는 새 켜기 요청이 있으면, 늦게 끝난 모델은 그 요청이 쓴다
+      const newerWaiting = my !== request && enabled && loading === pending;
+      if (!newerWaiting) {
+        if (loading === pending) loading = null;
+        // 아무도 기다리지 않는 불러오기가 늦게 끝나면 닫는다
+        pending.then((late) => { if (late !== landmarker) safeClose(late); }, () => {});
+      }
       if (my === request && enabled) {
         enabled = false;
         onError(["unsupported", "timeout"].includes(e.message) ? e.message : "load");
@@ -109,14 +117,18 @@ export function createFaceTracker({ onUpdate, onError }) {
     return lastTs;
   }
 
+  // 결과는 얼굴마다 윤곽 36점 [x, y]만 돌려준다 — 478점 전체와 z는 여기서 버린다
   function detect(image) {
     if (!enabled || !landmarker) return null;
     try {
-      return landmarker.detectForVideo(image, nextTimestamp()).faceLandmarks ?? [];
+      const faces = (landmarker.detectForVideo(image, nextTimestamp()).faceLandmarks ?? []).map(pickOutline);
+      recreated = false; // 성공했으니 다음 실패도 한 번은 다시 만든다 (아이폰 앱 전환은 여러 번 일어난다)
+      return faces;
     } catch {
-      // 아이폰이 앱 전환 뒤 WebGL 컨텍스트를 잃는 경우 등: 한 번은 다시 만들고, 또 실패하면 끈다
+      // 아이폰이 앱 전환 뒤 WebGL 컨텍스트를 잃는 경우 등: 다시 만들고, 다시 만든 직후에도 실패하면 끈다
       safeClose(landmarker);
       landmarker = null;
+      live = null; // 다시 만드는 동안 멈춘 옛 윤곽을 남기지 않는다
       stopLoop();
       if (!recreated) {
         recreated = true;

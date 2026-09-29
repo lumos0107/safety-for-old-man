@@ -130,8 +130,17 @@ export const FACE_OVAL = [
   152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
 ];
 
-// landmarks: MediaPipe 결과 {x, y, z}[] (0~1 비율). 화면 밖 좌표도 자르지 않는다 — 캔버스가 잘라 윤곽이 납작해지지 않게.
-export function faceOutline(landmarks, rect) {
+// landmarks: MediaPipe 결과 {x, y, z}[] 478개 (0~1 비율) → 윤곽 36점의 [x, y]만. 나머지 점과 z는 버린다.
+export function pickOutline(landmarks) {
   if (!Array.isArray(landmarks) || landmarks.length < 478) return [];
-  return FACE_OVAL.map((i) => toCanvas([landmarks[i].x, landmarks[i].y], rect));
+  return FACE_OVAL.map((i) => [landmarks[i].x, landmarks[i].y]);
+}
+
+// 화면 밖 좌표도 자르지 않는다 — 캔버스가 잘라 윤곽이 납작해지지 않게.
+export function outlineToCanvas(outline, rect) {
+  return outline.map((pt) => toCanvas(pt, rect));
+}
+
+export function faceOutline(landmarks, rect) {
+  return outlineToCanvas(pickOutline(landmarks), rect);
 }
