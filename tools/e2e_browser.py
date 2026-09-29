@@ -6,9 +6,11 @@
 import argparse
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -19,7 +21,7 @@ from ultralytics.utils import ASSETS
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "e" * 43
-PAGE_PORT, API_PORT = 5500, 8765
+PAGE_PORT, API_PORT, BLACKHOLE_PORT = 5500, 8765, 8766
 PAGE = f"http://localhost:{PAGE_PORT}/"
 # 인원 3명 이상. 페이지 CSP가 문자열 평가(wait_for_function)를 막으므로 텍스트 정규식으로 기다린다
 AT_LEAST_3 = re.compile(r"^(?:[3-9]|[1-9]\d+)$")
@@ -66,11 +68,43 @@ def people(page) -> int:
     return int(text) if text.isdigit() else -1
 
 
-def configure(page, token: str) -> None:
+def configure(page, token: str, port: int = API_PORT) -> None:
     page.click("#settings-btn")
-    page.fill("#server-url", f"http://127.0.0.1:{API_PORT}")
+    page.fill("#server-url", f"http://127.0.0.1:{port}")
     page.fill("#token", token)
     page.click("#settings button[value=save]")
+
+
+# 페이지가 만든 WebSocket과 카메라 스트림을 센다 (CDP로 주입되므로 페이지 CSP와 무관)
+PROBE = """
+window.__sockets = [];
+const NativeWS = window.WebSocket;
+window.WebSocket = class extends NativeWS {
+  constructor(...args) { super(...args); window.__sockets.push(this); }
+};
+window.__streams = [];
+const md = navigator.mediaDevices;
+const gum = md.getUserMedia.bind(md);
+md.getUserMedia = async (c) => { const s = await gum(c); window.__streams.push(s); return s; };
+"""
+LIVE_TRACKS = "() => window.__streams.flatMap(s => s.getTracks()).filter(t => t.readyState === 'live').length"
+
+
+def blackhole(port: int) -> socket.socket:
+    """TCP 연결은 받지만 WebSocket 핸드셰이크에 영원히 답하지 않는 서버 (응답 없는 네트워크 흉내)."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", port))
+    srv.listen()
+    held = []
+
+    def accept():
+        while True:
+            try:
+                held.append(srv.accept()[0])
+            except OSError:
+                return
+    threading.Thread(target=accept, daemon=True).start()
+    return srv
 
 
 def main() -> None:
@@ -93,6 +127,7 @@ def main() -> None:
                 f"--use-file-for-fake-video-capture={y4m}",
             ])
             context = browser.new_context(viewport={"width": 390, "height": 844})
+            context.add_init_script(PROBE)
             page = context.new_page()
             errors = []
             page.on("pageerror", lambda e: errors.append(str(e)))
@@ -101,12 +136,17 @@ def main() -> None:
             expect(status).to_have_text("설정 필요")
             step("설정 없으면 '설정 필요'")
 
-            configure(page, f"  {TOKEN}  ")  # 앞뒤 공백이 붙은 토큰
+            # 폰 키보드의 "이동"처럼 토큰 칸에서 Enter로 저장한다. 앞뒤 공백이 붙은 토큰.
+            page.click("#settings-btn")
+            page.fill("#server-url", f"http://127.0.0.1:{API_PORT}")
+            page.fill("#token", f"  {TOKEN}  ")
+            page.press("#token", "Enter")
+            expect(page.locator("#settings")).not_to_have_attribute("open", "")
             page.click("#start")
             expect(status).to_have_text("연결됨", timeout=30_000)
             expect(page.locator("#people")).to_have_text(AT_LEAST_3, timeout=30_000)
             page.screenshot(path=str(args.shots / "1_live.png"))
-            step(f"공백 붙은 토큰으로 연결, 세로 영상에서 {people(page)}명 인식")
+            step(f"Enter로 저장한 공백 붙은 토큰으로 연결, 세로 영상에서 {people(page)}명 인식")
 
             page.click("#mode")
             page.wait_for_timeout(1000)
@@ -114,6 +154,18 @@ def main() -> None:
             expect(page.locator("#stage")).to_have_class(re.compile(r"\bsync\b"))
             page.click("#mode")
             step("동기 표시 전환")
+
+            page.click("#start")  # 정지
+            expect(status).to_have_text("정지")
+            before = page.evaluate("() => window.__sockets.length")
+            page.evaluate("() => { const b = document.getElementById('start'); b.click(); b.click(); }")
+            expect(status).to_have_text("연결됨", timeout=30_000)
+            page.evaluate("() => { const b = document.getElementById('flip'); b.click(); b.click(); }")
+            page.wait_for_timeout(5000)
+            expect(status).to_have_text("연결됨")
+            assert page.evaluate("() => window.__sockets.length") - before == 1, "시작 두 번에 소켓이 여러 개"
+            assert page.evaluate(LIVE_TRACKS) == 1, f"살아 있는 카메라 트랙 {page.evaluate(LIVE_TRACKS)}개"
+            step("시작·카메라 전환을 빠르게 두 번 눌러도 소켓 1개, 카메라 트랙 1개, 연결 유지")
 
             page2 = context.new_page()
             page2.goto(PAGE)
@@ -142,6 +194,17 @@ def main() -> None:
             expect(status).to_have_text("토큰 확인")
             expect(page.locator("#start")).to_have_text("시작")
             step("틀린 토큰이면 '토큰 확인', 재연결하지 않음")
+
+            hole = blackhole(BLACKHOLE_PORT)
+            try:
+                configure(page, TOKEN, port=BLACKHOLE_PORT)
+                page.click("#start")
+                expect(status).to_have_text("연결 중")
+                expect(status).to_have_text("서버 꺼짐", timeout=15_000)
+            finally:
+                hole.close()
+            page.click("#start")  # 정지
+            step("응답 없는 서버면 '연결 중'에 머물지 않고 '서버 꺼짐'으로 재시도")
 
             if errors:
                 raise SystemExit(f"페이지 오류: {errors}")

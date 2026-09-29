@@ -6,6 +6,7 @@ import {
 const JPEG_QUALITY = 0.7;
 const MAX_SIDE = 640;
 const REPLY_TIMEOUT_MS = 5000;
+const CONNECT_TIMEOUT_MS = 8000; // 접속~ready까지. 인터넷이 안 되는 와이파이에서 OS 기본(수 분)만큼 멈추지 않게
 const KPT_MIN_CONF = 0.5;
 
 const $ = (id) => document.getElementById(id);
@@ -26,6 +27,7 @@ const state = {
   replyTimer: null, retryTimer: null,
   lastResult: null, lastResultAt: null, fps: null,
   stream: null, wakeLock: null,
+  starting: false, cameraRequest: 0,
 };
 
 // ---------- 설정 (이 브라우저에만 저장) ----------
@@ -107,18 +109,23 @@ function clearOverlay() {
 }
 
 // ---------- 카메라 ----------
+// 카메라 요청이 겹치면(버튼을 빠르게 두 번) 마지막 요청만 쓰고 앞선 요청이 받은 스트림은 바로 끈다.
+// 앞선 요청은 true를 돌려준다: 실패가 아니라 더 새 요청이 카메라를 맡았다는 뜻이다.
 async function startCamera() {
+  const request = ++state.cameraRequest;
   stopCamera();
   if (!navigator.mediaDevices?.getUserMedia) {
     setNotice("이 브라우저(또는 https가 아닌 주소)에서는 카메라를 쓸 수 없습니다.");
     return false;
   }
+  let stream;
   try {
-    state.stream = await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: state.facing, width: { ideal: 1280 }, height: { ideal: 720 } },
     });
   } catch (e) {
+    if (request !== state.cameraRequest) return true;
     setNotice(
       e.name === "NotAllowedError"
         ? "카메라 권한이 거부됐습니다. 주소창 왼쪽의 사이트 설정(자물쇠)에서 카메라를 허용한 뒤 새로고침하세요."
@@ -128,6 +135,12 @@ async function startCamera() {
     );
     return false;
   }
+  if (request !== state.cameraRequest) {
+    stream.getTracks().forEach((t) => t.stop());
+    return true;
+  }
+  stopCamera(); // 겹친 요청 사이에 다른 스트림이 들어왔으면 끈다
+  state.stream = stream;
   video.srcObject = state.stream;
   await video.play().catch(() => {});
   // 요청한 방향이 아니라 실제로 잡힌 카메라로 판단한다. 값이 없으면(노트북 웹캠 등) 전면으로 본다.
@@ -170,6 +183,7 @@ function detachSocket() {
 
 function connect() {
   clearTimeout(state.retryTimer);
+  if (state.ws) detachSocket(); // 이전 소켓이 떠돌며 나중에 인증해 이 연결을 4010으로 밀어내지 않게
   const { url, token } = loadSettings();
   const wsUrl = normalizeServerUrl(url);
   if (!wsUrl || !token) {
@@ -191,9 +205,13 @@ function connect() {
   state.ws = ws;
   state.authed = false;
   state.waitingSeq = null;
-  ws.onopen = () => ws.send(JSON.stringify({ type: "auth", token }));
+  ws.onopen = () => {
+    if (ws === state.ws) ws.send(JSON.stringify({ type: "auth", token }));
+  };
   ws.onmessage = (ev) => onMessage(ws, ev);
   ws.onclose = (ev) => onClose(ws, ev);
+  clearTimeout(state.replyTimer);
+  state.replyTimer = setTimeout(onReplyTimeout, CONNECT_TIMEOUT_MS); // ready를 받으면 해제
 }
 
 function scheduleReconnect() {
@@ -212,6 +230,7 @@ function onMessage(ws, ev) {
     return;
   }
   if (msg.type === "ready") {
+    clearTimeout(state.replyTimer); // 연결 단계 시간 제한 해제
     state.authed = true;
     state.attempt = 0;
     setStatus(STATUS.CONNECTED, "ok");
@@ -247,7 +266,8 @@ function onClose(ws, ev) {
   }
 }
 
-// 응답이 5초 안에 오지 않으면 연결이 멈춘 것으로 보고 새로 붙는다 (와이파이↔LTE 전환 등)
+// 연결이 8초 안에 ready에 이르지 못하거나 프레임 응답이 5초 안에 오지 않으면
+// 연결이 멈춘 것으로 보고 새로 붙는다 (와이파이↔LTE 전환, 인터넷이 안 되는 와이파이 등)
 function onReplyTimeout() {
   detachSocket();
   clearOverlay();
@@ -298,13 +318,19 @@ function onResult(r) {
 
 // ---------- 시작·정지 ----------
 async function start() {
+  if (state.starting) return; // 카메라를 켜는 동안 다시 누른 "시작"은 무시한다
   if (!hasSettings()) {
     setStatus(STATUS.NEED_SETUP, "bad");
     openSettings();
     return;
   }
   setNotice("");
-  if (!(await startCamera())) return;
+  state.starting = true;
+  try {
+    if (!(await startCamera())) return;
+  } finally {
+    state.starting = false;
+  }
   state.running = true;
   state.attempt = 0;
   $("start").textContent = "정지";
@@ -333,8 +359,10 @@ function openSettings() {
   if (!$("settings").open) $("settings").showModal();
 }
 
+// 취소는 submit 버튼이 아니어야 한다: 폼의 기본(첫) submit 버튼이 되면 키보드 Enter·"이동"이 취소로 처리된다
+$("settings-cancel").addEventListener("click", () => $("settings").close());
+
 $("settings-form").addEventListener("submit", (e) => {
-  if (e.submitter?.value !== "save") return;
   const url = $("server-url").value.trim();
   const token = cleanToken($("token").value);
   if (!normalizeServerUrl(url)) {
