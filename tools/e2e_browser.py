@@ -108,7 +108,17 @@ WebSocket.prototype.send = function (data) {
 window.__sockets = [];
 const NativeWS = window.WebSocket;
 window.WebSocket = class extends NativeWS {
-  constructor(...args) { super(...args); window.__sockets.push(this); }
+  constructor(...args) {
+    super(...args);
+    window.__sockets.push(this);
+    this.addEventListener("message", (e) => {  // 받은 결과의 점 배치 (관절 26점 확인용)
+      if (typeof e.data !== "string") return;
+      try {
+        const m = JSON.parse(e.data);
+        if (m.type === "result") window.__lastResult = { layout: m.layout, counts: m.people.map((p) => p.kpts.length) };
+      } catch {}
+    });
+  }
 };
 window.__streams = [];
 const md = navigator.mediaDevices;
@@ -369,6 +379,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shots", type=Path, default=Path(tempfile.gettempdir()) / "e2e_shots")
     args = ap.parse_args()
+    # 모델 파일이 없으면 서버가 대비 동작으로 17점을 내 "관절 26점" 확인이 이유 없이 실패한다 — 먼저 알린다
+    sys.path.insert(0, str(ROOT))
+    from server.pose_detail import MODEL_PATH
+    if not MODEL_PATH.exists():
+        raise SystemExit(r"관절 26점 모델이 없습니다. 먼저 .venv\Scripts\python tools\fetch_models.py 를 실행하세요.")
     args.shots.mkdir(parents=True, exist_ok=True)
 
     tmp = Path(tempfile.mkdtemp())
@@ -432,6 +447,10 @@ def main() -> None:
             expect(page.locator("#people")).to_have_text(AT_LEAST_3, timeout=30_000)
             page.screenshot(path=str(args.shots / "1_live.png"))
             step(f"Enter로 저장한 공백 붙은 토큰으로 연결, 세로 영상에서 {people(page)}명 인식")
+            expect(page.locator("#joints")).to_have_text("26점", timeout=10_000)
+            last = page.evaluate("() => window.__lastResult")
+            assert last["layout"] == "halpe26" and last["counts"] and set(last["counts"]) == {26}, last
+            step(f"관절 26점: '관절' 칸 26점, 받은 결과 layout=halpe26, 사람마다 점 26개 ({len(last['counts'])}명)")
 
             page.click("#mode")
             page.wait_for_timeout(1000)

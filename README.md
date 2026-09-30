@@ -2,18 +2,18 @@
 
 팀 눈길손길 (제주대 창의융합 캡스톤디자인) — 다중 센서 융합 비전 기반 독거노인 안전 모니터링 시스템의 **개발용 자세 인식 시제품**.
 
-폰·노트북 브라우저 카메라 영상을 개발 PC의 GPU로 보내 관절 17개를 인식하고 화면에 뼈대를 그린다.
+폰·노트북 브라우저 카메라 영상을 개발 PC의 GPU로 보내 관절 26개(머리 꼭대기·목·골반 가운데·발 포함)를 인식하고 화면에 뼈대를 그린다.
 원본 영상을 네트워크로 보내는 **개발용 구조**이며, 최종 시스템(엣지 처리·원본 영상 미전송)과 다르다.
 영상은 저장하지 않는다. 촬영 전 대상자 동의를 받는다.
 
 - 페이지: https://lumos0107.github.io/safety-for-old-man/
-- 설계: [자세 인식](design/2026-09-29-web-pose-design.md) · [얼굴 윤곽](design/2026-09-30-face-outline-design.md) · [개발 경위와 결정 기록](design/개발_경위와_결정_기록.md) · [평가·보완 기록](design/2026-09-30-evaluation-rounds.md) · [3인 합의 점검 기록](design/2026-09-30-consensus-rounds.md)
+- 설계: [자세 인식](design/2026-09-29-web-pose-design.md) · [얼굴 윤곽](design/2026-09-30-face-outline-design.md) · [관절 세분화](design/2026-09-30-body-detail-design.md) ([심사 합의 기록](design/2026-09-30-body-detail-review-rounds.md)) · [개발 경위와 결정 기록](design/개발_경위와_결정_기록.md) · [평가·보완 기록](design/2026-09-30-evaluation-rounds.md) · [3인 합의 점검 기록](design/2026-09-30-consensus-rounds.md)
 
 > **보안 주의 — 페이지 주소를 다른 사이트와 함께 씀 (결정 필요):** GitHub Pages는 한 계정의 모든 저장소가 같은 출처(`https://lumos0107.github.io`)를 쓰고, 브라우저 저장소(localStorage)는 출처별이다. 이 계정에는 지금 이 저장소 말고도 Pages 사이트가 4개(abang-log-presentation, HealthAge, inventory-app, web-practice-2026) 있어, 그중 한 곳에 스크립트 결함이 생기면 폰에 저장된 토큰·서버 주소를 읽거나 바꿀 수 있다 (가능성은 낮지만 영향은 촬영 영상 유출). 권장: 이 페이지를 **전용 GitHub Organization으로 옮긴다** (옮기면 페이지 주소가 바뀐다: `server/.env`의 `ALLOWED_ORIGINS`와 함께 `git grep lumos0107`로 나오는 곳 — `server/config.py` 기본값, `tools/gen_token.py`, `server/.env.example`, README 링크, 테스트 상수 — 도 새 주소로 바꾸고, 토큰을 교체(아래 '토큰 교체')한 뒤 폰마다 설정을 다시 넣는다. 옛 주소의 브라우저 저장소에 옛 토큰이 남기 때문). 대안: 다른 4개 사이트의 Pages를 끈다.
 
 ## 서버 (개발 PC)
 
-**준비물:** Windows, NVIDIA GPU와 드라이버(CUDA 12.8 지원), [uv](https://docs.astral.sh/uv/), [Tailscale](https://tailscale.com/download) (설치 후 로그인, 로그인 계정은 2단계 인증 권장), 인터넷 (첫 실행 때 자세 모델 `yolo11n-pose.pt`를 자동으로 받는다 — `*.pt`는 저장소에 없음).
+**준비물:** Windows, NVIDIA GPU와 드라이버(CUDA 12.8 지원), [uv](https://docs.astral.sh/uv/), [Tailscale](https://tailscale.com/download) (설치 후 로그인, 로그인 계정은 2단계 인증 권장), 인터넷 (첫 실행 때 자세 모델 `yolo11n-pose.pt`를 자동으로 받는다 — `*.pt`는 저장소에 없음. 관절 26점 모델은 아래 `fetch_models.py`로 한 번 받는다).
 
 **처음 한 번**
 
@@ -22,7 +22,11 @@ uv venv --python 3.12 .venv
 uv pip install --python .venv torch torchvision --index-url https://download.pytorch.org/whl/cu128
 uv pip install --python .venv -r server/requirements.txt
 .venv\Scripts\python tools\gen_token.py          # server/.env 생성, 폰에 넣을 토큰 출력
+.venv\Scripts\python tools\fetch_models.py       # 관절 26점 모델(약 56MB)을 받아 해시 확인 → server/models/
 ```
+
+- 관절 26점은 `onnxruntime-gpu` 1.23.2(CUDA 12용)가 **torch(cu128)의 CUDA DLL**을 빌려 GPU에서 돈다. **torch를 CUDA 13 빌드로 바꾸면 `onnxruntime-gpu`도 함께 바꿔야 한다** (안 그러면 예외 없이 CPU로 떨어져 느려짐 — 서버 창에 경고가 뜬다).
+- 모델 파일이 없거나 해시가 다르면 서버는 멈추지 않고 **관절 17점**으로 동작하고, 서버 창에 `!!!` 줄로 이유와 해결 방법을 띄운다. 끄려면 `server/.env`에 `DETAIL=off`.
 
 첫 `run.ps1` 실행 때 Tailscale이 Funnel·HTTPS 허용 링크를 출력하면 브라우저에서 한 번 허용한다.
 
@@ -32,7 +36,7 @@ uv pip install --python .venv -r server/requirements.txt
 powershell -ExecutionPolicy Bypass -File server\run.ps1   # Funnel 켜고 서버 실행, Ctrl+C로 둘 다 끔
 ```
 
-- 창에 "**서버 준비 완료**"가 뜨면 폰에서 시작한다 (모델을 불러오느라 몇 초, 첫 실행은 더 걸린다).
+- 창에 "**서버 준비 완료**"가 뜨면 폰에서 시작한다 (모델을 불러오느라 몇 초, 첫 실행은 더 걸린다). 바로 위 줄에 `관절 26점 (RTMPose-m, GPU)`처럼 관절 모델 상태가 나온다.
 - 폰에 넣을 **서버 주소**는 실행 창에 나오는 `https://<pc이름>.<tailnet>.ts.net` (또는 `tailscale funnel status`). 서버는 이 PC 안의 18080번 포트(흔한 개발 포트를 피함)에서 돌고, 폰 주소에는 포트가 없다.
 - 서버 창에는 준비 완료, 인증 성공·연결 대체, 허용되지 않은 주소 거부, 인증 실패가 시각과 함께 나온다 (거부·실패는 첫 건은 바로, 이어지는 건은 1분마다 "N건 더"로 모음). 토큰·영상·접속 IP는 남기지 않는다.
 - **서버 창 로그 읽는 법:**
@@ -49,7 +53,8 @@ powershell -ExecutionPolicy Bypass -File server\run.ps1   # Funnel 켜고 서버
 
 1. 페이지를 열고 **설정**에 서버 주소와 토큰을 넣고 **저장** → **시작**.
 2. 토큰 원본은 PC의 `server/.env`의 `TOKEN=` 뒤 값이다 (언제든 다시 볼 수 있음). 폰으로 옮길 때는 단체방 대신 '나에게 보내기'를 쓰고, 붙여 넣은 뒤 그 메시지는 지운다. 설정 창의 **보기**로 붙여 넣은 값을 확인할 수 있다.
-3. 뼈대 색: 파랑 = 사람의 왼쪽, 주황 = 사람의 오른쪽, 노랑 = 몸통, 분홍 = 얼굴.
+3. 뼈대 색: 파랑 = 사람의 왼쪽, 주황 = 사람의 오른쪽, 노랑 = 몸통(어깨·골반 사각형과 목–골반 가운데 척추), 분홍 = 얼굴·머리(머리 꼭대기–목, 코–목). 발(엄지·새끼발가락·뒤꿈치)은 같은 쪽 다리 색으로 발목에서 세 갈래로 그린다.
+4. 상단 **관절** 칸: `26점` / `17점`(모델이 없어 대비 동작 중이거나 `DETAIL=off`) / `?`(알 수 없는 결과 — 그리지 않음).
 
 ## 얼굴 윤곽 (시연용, 기본 끔)
 
@@ -74,6 +79,8 @@ powershell -ExecutionPolicy Bypass -File server\run.ps1   # Funnel 켜고 서버
 | 카메라 끊김 | 다른 앱이 카메라를 쓸 때 '카메라가 꺼졌습니다' 안내가 뜨는지 (거짓 안내가 없는지) | | | |
 | 모델 미리 받기 | 전날 받아 둔 얼굴 모델이 당일에 바로 켜지는지 | | | |
 | 화면 꺼짐 방지 | 폰을 세워 두고 손대지 않은 채 2분 — 화면이 켜진 채 뼈대가 계속 나오는지 (아이폰·안드로이드) | | | |
+| 관절 26점 | 전신이 보이게 서서: 발·목·머리 꼭대기가 제자리에 찍히는지, 상단 fps가 `DETAIL=off` 때보다 15% 넘게 떨어지지 않는지 | | | |
+| 상반신 구도 (**시연 리허설 전까지**) | 얼굴 시연처럼 가까이 서서 상반신만 보일 때 골반·무릎·척추가 화면 아래 끝에 그려지는지 — 그려지면 [설계 6.4](design/2026-09-30-body-detail-design.md)의 대책 후보 중 고른다 | | | |
 
 ## 화면을 고칠 때
 
@@ -88,10 +95,10 @@ powershell -ExecutionPolicy Bypass -File server\run.ps1   # Funnel 켜고 서버
 
 ## 테스트
 
-필요: Python 가상환경(위), Node 21 이상(`node --test`의 glob), 설치된 Chrome. 종단 검증은 포트 5500·8765·8766을 쓴다.
+필요: Python 가상환경(위), Node 21 이상(`node --test`의 glob), 설치된 Chrome. 종단 검증은 포트 5500·8765·8766을 쓰고, 관절 26점 모델 파일(`fetch_models.py`)이 있어야 한다.
 
 ```powershell
-.venv\Scripts\python -m pytest                      # 서버 (GPU 필요)
+.venv\Scripts\python -m pytest                      # 서버 (GPU 필요, 관절 26점 테스트 일부는 모델 파일이 있어야 돈다)
 node --test "web_tests/*.test.mjs"                  # 프런트 순수 함수·얼굴 상태 머신
 .venv\Scripts\python -X utf8 tools\e2e_browser.py   # 브라우저 종단 (Chrome 필요)
 ```
@@ -101,9 +108,10 @@ node --test "web_tests/*.test.mjs"                  # 프런트 순수 함수·�
 ## 시연 체크리스트
 
 - **전날:** 폰에서 설정 → 얼굴 윤곽 켬 → 저장 → **시작** → 상단 "얼굴" 칸이 `-`에서 숫자로 바뀔 때까지 기다린다 (서버 없이도 됨, 이때 16MB를 받는다). 저장만 하고 시작하지 않으면 받지 않는다. 당일 시작 전에 한 번 더 확인한다 (캐시가 지워졌을 수 있음). 전날부터 `main` push 금지.
-- **시작 전:** PC 절전 끄기, 폰 자동 잠금 늘리기·저전력(절전) 모드 끄기 (화면 꺼짐 방지가 안 되는 브라우저에서도 시연이 멈추지 않게), `run.ps1` 실행 → "서버 준비 완료" 확인.
+- **시작 전:** PC 절전 끄기, 폰 자동 잠금 늘리기·저전력(절전) 모드 끄기 (화면 꺼짐 방지가 안 되는 브라우저에서도 시연이 멈추지 않게), `run.ps1` 실행 → "서버 준비 완료"와 그 위 줄의 `관절 26점 (RTMPose-m, GPU)` 확인, 폰에서 시작한 뒤 상단 "관절" 칸이 `26점`인지 확인 (17점으로 조용히 시연하지 않게).
 - **한 기기만:** 시연 중에는 다른 팀원 기기·탭에서 시작하지 않는다 (새 연결이 시연 폰을 밀어내고, 밀려난 폰은 스스로 되찾지 않는다).
 - **순서:** 전신 뼈대는 얼굴 윤곽을 끈 채 멀리서 → 얼굴 시연 전에 설정에서 켜고 가까이. 설정 창에는 서버 주소가 보이므로 **프로젝터에 비치지 않는 순간에 연다.** 토큰 "보기"는 누르지 않는다. 토큰이 드러났으면 끝난 뒤 위 '토큰 교체'.
+- **관절 26점이 어색할 때:** 상반신 구도 확인(위 실기기 표)을 끝내기 전에는 얼굴(가까이) 단계에서 골반·척추가 화면 아래 끝에 보일 수 있다 — 설명 멘트를 준비하거나, `server/.env`에 `DETAIL=off` → 서버 창 Ctrl+C → `run.ps1` 다시 실행 → 폰에서 다시 시작 (설정은 켤 때만 읽으므로 즉시 바뀌지 않는다).
 - 촬영 대상자 동의. 화면 아래 안내대로 영상은 서버(개발 PC)로 전송되지만 저장하지 않는다고 설명한다.
 - 끝나면 PC 창에서 Ctrl+C (Funnel도 함께 꺼짐).
 
@@ -111,3 +119,4 @@ node --test "web_tests/*.test.mjs"                  # 프런트 순수 함수·�
 
 - 서버가 쓰는 Ultralytics와 YOLO11 가중치는 **AGPL-3.0**이다. 지금은 공개 저장소라 소스 공개 조건과 맞지만, 비공개·상용(엣지 장치, 기업 연계 등)으로 쓸 때는 라이선스를 검토해야 한다.
 - 화면의 MediaPipe 파일과 얼굴 모델은 Apache-2.0이다 (`vendor/mediapipe/SOURCE.md`).
+- 관절 26점 모델(RTMPose-m Halpe26, OpenMMLab)과 참고한 rtmlib 코드는 Apache-2.0이다. 학습 데이터(Body7: COCO·AI Challenger·CrowdPose·MPII·sub-JHMDB·Halpe·PoseTrack18) 중 일부는 비상업 연구용 조건으로 알려져 있으나 **미확인**이다. 수업 시제품에는 쓰고, **기업 연계·상용으로 바꿀 때는 YOLO11 AGPL과 함께 다시 검토**한다.

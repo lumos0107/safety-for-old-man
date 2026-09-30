@@ -11,6 +11,8 @@ fastapi
 uvicorn[standard]
 python-dotenv
 websockets>=13
+# 관절 26점 (RTMPose). CUDA 12용 판으로 고정 — 최신판(1.30)은 CUDA 13용이라 torch cu128과 맞지 않았다 (설계 4장)
+onnxruntime-gpu==1.23.2
 # 테스트·검증
 pytest
 httpx2

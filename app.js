@@ -1,6 +1,7 @@
 import {
   STATUS, closePolicy, retryDelayMs, shouldGiveUp, normalizeServerUrl, cleanToken,
   fitContain, scaleToLongSide, visibleSegments, visiblePoints, ema, COLORS, outlineToCanvas, frameErrorText,
+  layoutOf, drawablePeople, jointLabel,
 } from "./lib.js";
 import { createFaceTracker } from "./face.js";
 
@@ -8,7 +9,6 @@ const JPEG_QUALITY = 0.7;
 const MAX_SIDE = 640;
 const REPLY_TIMEOUT_MS = 5000;
 const CONNECT_TIMEOUT_MS = 8000; // 접속~ready까지. 인터넷이 안 되는 와이파이에서 OS 기본(수 분)만큼 멈추지 않게
-const KPT_MIN_CONF = 0.5;
 
 const $ = (id) => document.getElementById(id);
 const video = $("video");
@@ -120,6 +120,7 @@ function resetStats() {
   $("fps").textContent = "-";
   $("ms").textContent = "-";
   $("people").textContent = "-";
+  $("joints").textContent = "-";
   $("faces").textContent = "-";
 }
 
@@ -161,14 +162,16 @@ function drawFaces(faces, rect) {
 }
 
 function drawPeople(r, rect) {
-  for (const p of r.people) {
+  // 점 배치(17점/26점)는 서버 결과가 알려 준다. 모르는 배치나 개수가 맞지 않는 사람은 그리지 않는다 ("관절" 칸에 ?)
+  const layout = layoutOf(r);
+  for (const p of drawablePeople(r)) {
     const [x1, y1, x2, y2] = p.box;
     ctx.strokeStyle = "rgba(255, 255, 255, 0.55)"; // 좌우 색과 겹치지 않게 박스는 흰색
     ctx.lineWidth = 1.5;
     ctx.strokeRect(rect.x + x1 * rect.w, rect.y + y1 * rect.h, (x2 - x1) * rect.w, (y2 - y1) * rect.h);
     ctx.lineWidth = 3.5;
     ctx.lineCap = "round";
-    for (const [ax, ay, bx, by, color] of visibleSegments(p.kpts, rect, KPT_MIN_CONF)) {
+    for (const [ax, ay, bx, by, color] of visibleSegments(p.kpts, rect, layout.minConf, layout)) {
       ctx.strokeStyle = color;
       ctx.beginPath();
       ctx.moveTo(ax, ay);
@@ -177,7 +180,7 @@ function drawPeople(r, rect) {
     }
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = "#ffffff"; // 어두운 배경에서도 보이게 흰 테두리
-    for (const [x, y, color] of visiblePoints(p.kpts, rect, KPT_MIN_CONF)) {
+    for (const [x, y, color] of visiblePoints(p.kpts, rect, layout.minConf, layout)) {
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(x, y, 4.5, 0, Math.PI * 2);
@@ -479,6 +482,7 @@ function onResult(r) {
   $("fps").textContent = state.fps == null ? "-" : state.fps.toFixed(1);
   $("ms").textContent = r.infer_ms.toFixed(1);
   $("people").textContent = String(r.people.length);
+  $("joints").textContent = jointLabel(r);
   draw();
 }
 

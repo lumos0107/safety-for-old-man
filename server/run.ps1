@@ -19,6 +19,13 @@ if (-not (Test-Path (Join-Path $PSScriptRoot ".env"))) {
 }
 Set-Location $Root
 
+# 관절 26점 모델이 없으면 서버는 17점으로 켜진다 (설계 6.5). 시연 전에 알아채도록 여기서 먼저 알린다.
+$DetailOff = ($env:DETAIL -and $env:DETAIL.Trim() -ieq "off") -or
+    (Select-String -Path (Join-Path $PSScriptRoot ".env") -Pattern '^\s*DETAIL\s*=\s*off\s*$' -Quiet)
+if (-not $DetailOff -and -not (Test-Path (Join-Path $PSScriptRoot "models\rtmpose-m_halpe26.onnx"))) {
+    Write-Host "관절 26점 모델이 없어 17점으로 켭니다. 받으려면 (서버를 끈 뒤): .venv\Scripts\python tools\fetch_models.py" -ForegroundColor Yellow
+}
+
 # 이미 서버가 떠 있으면 여기서 멈춘다: 두 번째 서버는 포트 충돌로 곧 끝나고, 그때 finally가
 # 첫 번째 서버의 Funnel까지 꺼 버린다 (Tailscale을 건드리기 전에 확인).
 # 주의: 첫 서버가 모델을 불러오는 동안(창에 "서버 준비 완료"가 뜨기 전)은 포트가 아직 열리지 않아 이 검사로 못 막는다.

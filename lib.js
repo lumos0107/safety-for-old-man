@@ -108,22 +108,78 @@ export function toCanvas([nx, ny], rect) {
   return [rect.x + nx * rect.w, rect.y + ny * rect.h];
 }
 
+// Halpe26 26점 (관절 세분화, design/2026-09-30-body-detail-design.md 6.4): 0~16은 COCO와 같고
+// 17 머리 꼭대기, 18 목, 19 골반 가운데, 20·21 엄지발가락, 22·23 새끼발가락, 24·25 뒤꿈치 (각각 왼·오).
+// 17~25는 "홀수 = 왼쪽"이 맞지 않으므로 색은 번호별 표로 정한다.
+const HALPE26_POINT_PART = [
+  "face", "face", "face", "face", "face",
+  "leftArm", "rightArm", "leftArm", "rightArm", "leftArm", "rightArm",
+  "leftLeg", "rightLeg", "leftLeg", "rightLeg", "leftLeg", "rightLeg",
+  "face", "trunk", "trunk",
+  "leftLeg", "rightLeg", "leftLeg", "rightLeg", "leftLeg", "rightLeg",
+];
+// [a, b, 부위]. 지금의 몸통 사각형을 유지하고 척추(목–골반 가운데)를 더한다.
+// 귀–어깨 대신 머리 꼭대기–목·코–목으로 머리를 몸에 잇는다. 발은 같은 쪽 다리 색 (새 색을 늘리지 않음).
+const HALPE26_EDGES = [
+  [0, 1, "face"], [0, 2, "face"], [1, 2, "face"], [1, 3, "face"], [2, 4, "face"],
+  [17, 18, "face"], [0, 18, "face"],
+  [5, 6, "trunk"], [11, 12, "trunk"], [5, 11, "trunk"], [6, 12, "trunk"], [18, 19, "trunk"],
+  [5, 7, "leftArm"], [7, 9, "leftArm"], [6, 8, "rightArm"], [8, 10, "rightArm"],
+  [11, 13, "leftLeg"], [13, 15, "leftLeg"], [12, 14, "rightLeg"], [14, 16, "rightLeg"],
+  [15, 20, "leftLeg"], [15, 22, "leftLeg"], [15, 24, "leftLeg"],
+  [16, 21, "rightLeg"], [16, 23, "rightLeg"], [16, 25, "rightLeg"],
+];
+const HALPE26_EDGE_PART = new Map(HALPE26_EDGES.flatMap(([a, b, part]) => [[`${a}-${b}`, part], [`${b}-${a}`, part]]));
+
+// 서버 결과의 layout 이름 → 점 개수·선·색·표시 기준 점수
+export const LAYOUTS = Object.freeze({
+  coco17: Object.freeze({ count: 17, edges: SKELETON, pointColor, segmentColor, minConf: 0.5, label: "17점" }),
+  halpe26: Object.freeze({
+    count: 26,
+    edges: HALPE26_EDGES.map(([a, b]) => [a, b]),
+    pointColor: (i) => COLORS[HALPE26_POINT_PART[i]],
+    segmentColor: (a, b) => COLORS[HALPE26_EDGE_PART.get(`${a}-${b}`)],
+    minConf: 0.4, // 제대로 잡힌 점 0.41 이상, 가려진 발 0.2 이하 (설계 4장). 가려진 골반은 못 거름 — 7장
+    label: "26점",
+  }),
+});
+
+// layout이 없으면 예전 서버(17점). 모르는 이름이면 null — 잘못된 번호로 선을 긋지 않는다
+export function layoutOf(result) {
+  const name = result.layout ?? "coco17";
+  return Object.hasOwn(LAYOUTS, name) ? LAYOUTS[name] : null;
+}
+
+// 그릴 사람: 배치를 알고 점 개수가 맞는 사람만
+export function drawablePeople(result) {
+  const layout = layoutOf(result);
+  if (!layout) return [];
+  return result.people.filter((p) => Array.isArray(p.kpts) && p.kpts.length === layout.count);
+}
+
+// 상단 "관절" 칸: 26점 / 17점 / ?(모르는 배치이거나 개수가 맞지 않는 사람이 있음)
+export function jointLabel(result) {
+  const layout = layoutOf(result);
+  if (!layout || drawablePeople(result).length !== result.people.length) return "?";
+  return layout.label;
+}
+
 // [x1, y1, x2, y2, 색]
-export function visibleSegments(kpts, rect, minConf) {
+export function visibleSegments(kpts, rect, minConf, layout = LAYOUTS.coco17) {
   const out = [];
-  for (const [a, b] of SKELETON) {
+  for (const [a, b] of layout.edges) {
     if (kpts[a][2] >= minConf && kpts[b][2] >= minConf) {
-      out.push([...toCanvas(kpts[a], rect), ...toCanvas(kpts[b], rect), segmentColor(a, b)]);
+      out.push([...toCanvas(kpts[a], rect), ...toCanvas(kpts[b], rect), layout.segmentColor(a, b)]);
     }
   }
   return out;
 }
 
 // [x, y, 색]
-export function visiblePoints(kpts, rect, minConf) {
+export function visiblePoints(kpts, rect, minConf, layout = LAYOUTS.coco17) {
   const out = [];
   kpts.forEach((k, i) => {
-    if (k[2] >= minConf) out.push([...toCanvas(k, rect), pointColor(i)]);
+    if (k[2] >= minConf) out.push([...toCanvas(k, rect), layout.pointColor(i)]);
   });
   return out;
 }
