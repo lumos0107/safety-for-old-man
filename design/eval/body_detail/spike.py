@@ -31,6 +31,11 @@ YOLOX_M = BASE + "rtmposev1/onnx_sdk/yolox_m_8xb8-300e_humanart-c2c7a14a.zip"
 FEET = slice(20, 26)
 
 
+def r2(a):
+    a = np.asarray(a)
+    return [r2(v) for v in a] if a.ndim > 1 else [round(float(v), 2) for v in a]
+
+
 def ms(fn, n=30):
     fn()
     t = time.perf_counter()
@@ -58,6 +63,17 @@ def iou(a, b):
     return i / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i)
 
 
+def edge_points(m, img, box):
+    """SimCC 최댓값 위치가 첫 칸·끝 칸(±1칸)인 점 = 잘라낸 영역 가장자리에 붙은 점."""
+    x, _, _ = m.preprocess(img, box)
+    sx, sy = m.inference(x)
+    lx, ly = sx[0].argmax(-1), sy[0].argmax(-1)
+    vals = (sx[0].max(-1) + sy[0].max(-1)) / 2
+    nx, ny = sx.shape[-1], sy.shape[-1]
+    return [(j, round(float(vals[j]), 2)) for j in range(len(lx))
+            if lx[j] <= 1 or lx[j] >= nx - 2 or ly[j] <= 1 or ly[j] >= ny - 2]
+
+
 def main():
     print("onnxruntime", ort.__version__)
     det = YOLO("yolo11n-pose.pt")
@@ -70,14 +86,35 @@ def main():
         small = cv2.resize(img, None, fx=640 / max(img.shape[:2]), fy=640 / max(img.shape[:2]))
         print(f"{name}: {ms(lambda: det.predict(small, imgsz=640, conf=0.5, classes=[0], verbose=False)):.1f}ms")
 
-    print("\n== 2. 26점/133점 모델 속도 (rtmlib, 사람마다 batch=1) ==")
+    print("\n== 2. 26점/133점 모델 속도 (세션 직접, 예열 5회 뒤 50회 평균) ==")
     models = {k: RTMPose(u, model_input_size=(192, 256), backend="onnxruntime", device="cuda") for k, u in POSE.items()}
-    bb = boxes(bus)  # 상자는 미리 구해 둔다 (YOLO 시간이 섞이지 않게)
+    batch = {b: np.random.rand(b, 3, 256, 192).astype(np.float32) for b in (1, 2, 3, 4)}
     for k, m in models.items():
-        print(f"{k}: provider={m.session.get_providers()[0]} 1명 {ms(lambda: m(bus, bb[:1])):.1f}ms, "
-              f"3명 {ms(lambda: m(bus, bb[:3])):.1f}ms")
-    cpu = RTMPose(POSE["halpe26-m"], model_input_size=(192, 256), backend="onnxruntime", device="cpu")
-    print(f"halpe26-m CPU: 1명 {ms(lambda: cpu(bus, bb[:1]), 10):.1f}ms, 3명 {ms(lambda: cpu(bus, bb[:3]), 10):.1f}ms")
+        sess = m.session
+        for b in (1, 4):
+            for _ in range(5):
+                sess.run(None, {"input": batch[b]})
+        t1 = ms(lambda: sess.run(None, {"input": batch[1]}), 50)
+        t4 = ms(lambda: sess.run(None, {"input": batch[4]}), 50)
+        print(f"{k}: provider={sess.get_providers()[0]} batch1 {t1:.2f}ms, batch4 {t4:.2f}ms")
+    cpu = RTMPose(POSE["halpe26-m"], model_input_size=(192, 256), backend="onnxruntime", device="cpu").session
+    print("halpe26-m CPU:", ", ".join(f"batch{b} {ms(lambda: cpu.run(None, {'input': batch[b]}), 10):.1f}ms" for b in (1, 2, 3, 4)))
+    seq_cpu = []
+    for b in [1, 2, 1, 3]:
+        t = time.perf_counter(); cpu.run(None, {"input": batch[b]}); seq_cpu.append(f"{b}명:{(time.perf_counter() - t) * 1000:.1f}")
+    print("CPU 크기 바꿔 가며:", " ".join(seq_cpu))
+    bb = boxes(bus)  # 상자는 미리 구해 둔다 (YOLO 시간이 섞이지 않게)
+    m = models["halpe26-m"]
+    print(f"참고 rtmlib 전체(자르기+추론+복원, 사람마다 batch=1, GPU): 1명 {ms(lambda: m(bus, bb[:1])):.1f}ms, 3명 {ms(lambda: m(bus, bb[:3])):.1f}ms")
+    onnx = Path.home() / ".cache/rtmlib/hub/checkpoints/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.onnx"
+    fresh = time.perf_counter()
+    fs = ort.InferenceSession(str(onnx), providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    made = time.perf_counter()
+    fs.run(None, {"input": batch[4]})
+    first = time.perf_counter()
+    fs.run(None, {"input": batch[4]})
+    print(f"새 세션: 만들기 {(made - fresh) * 1000:.0f}ms, 첫 실행(batch 4) {(first - made) * 1000:.0f}ms, "
+          f"두 번째 {(time.perf_counter() - first) * 1000:.1f}ms")
 
     print("\n== 3. 묶음(batch) 크기가 바뀔 때 (halpe26-m 세션 직접, GPU) ==")
     s = models["halpe26-m"].session
@@ -96,14 +133,21 @@ def main():
     print("4로 고정해 채움:", " ".join(out))
 
     print("\n== 4. 서 있는 사람 점수 (halpe26-m) ==")
-    m = models["halpe26-m"]
     for name, img in [("bus", bus), ("zidane", zid)]:
         kp, sc = m(img, boxes(img))
-        print(f"{name}: 점수 범위 {sc.min():.2f}~{sc.max():.2f}, 발 6점 점수 {np.round(sc[:, FEET], 2).tolist()}")
+        print(f"{name}: 점수 범위 {sc.min():.2f}~{sc.max():.2f}, 발 6점 점수 {r2(sc[:, FEET])}")
         h, w = img.shape[:2]
         outside = [(i, j, round(float(sc[i, j]), 2)) for i in range(len(kp)) for j in range(26)
                    if not (0 <= kp[i, j, 0] < w and 0 <= kp[i, j, 1] < h)]
         print(f"  이미지 밖 점 (사람, 번호, 점수): {outside}")
+        yc = det.predict(img, conf=0.5, classes=[0], verbose=False)[0].keypoints.conf.cpu().numpy()
+        for i in range(len(kp)):
+            low = [(j, int(kp[i, j, 0]), int(kp[i, j, 1]), round(float(sc[i, j]), 2),
+                    round(float(yc[i, j]), 2) if j < 17 else None) for j in (11, 12, 13, 14, 15, 16, 19)]
+            print(f"  사람 {i} 하반신 (번호, x, y, RTMPose 점수, YOLO 점수): {low}")
+        k2, s2 = m(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), boxes(img))
+        d = np.abs(kp - k2)
+        print(f"  BGR 대 RGB 입력: 좌표 차이 평균 {d.mean():.2f}px 최대 {d.max():.1f}px, 평균 점수 {sc.mean():.3f} 대 {s2.mean():.3f}")
         cv2.imwrite(str(OUT / f"upright_{name}.jpg"), draw_skeleton(img.copy(), kp, sc, kpt_thr=0.4))
 
     print("\n== 5. 누운 자세 흉내 (사람을 잘라 돌림) ==")
@@ -125,8 +169,9 @@ def main():
         best = max(range(len(b)), key=lambda i: iou(b[i], gt))
         kp, sc = m(c, [b[best]])
         print(f"{name}: 상자 {[int(v) for v in b[best]]} (IoU {iou(b[best], gt):.2f}), "
-              f"YOLO 17점 점수 {np.round(r.keypoints.conf[best].cpu().numpy(), 2).tolist()}")
-        print(f"  RTMPose 26점 점수 {np.round(sc[0], 2).tolist()}")
+              f"YOLO 17점 점수 {r2(r.keypoints.conf[best].cpu().numpy())}")
+        print(f"  RTMPose 26점 점수 {r2(sc[0])}")
+        print(f"  잘라낸 영역 가장자리 칸(SimCC 첫·끝 ±1칸)에 붙은 점 (번호, 점수): {edge_points(m, c, b[best])}")
         print(f"  RTMPose 26점 좌표 {[[int(x), int(y)] for x, y in kp[0]]}")
         tag = name.replace(" ", "_")
         cv2.imwrite(str(OUT / f"lying_{tag}_yolo.jpg"), r.plot())
