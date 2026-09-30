@@ -101,7 +101,8 @@ def _frame_seq(text: str) -> int | None:
     return seq
 
 
-def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
+def create_app(settings: Settings, predictor: Predictor, notes: tuple[str, ...] = ()) -> FastAPI:
+    """notes: 준비 완료 전에 서버 창에 띄울 줄 (관절 26점 상태 등)."""
     # 모델 호출이 겹치지 않도록 추론 전용 스레드는 하나만 둔다 (연결이 대체되는 순간 포함)
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pose")
     registry = Registry(settings.max_pending)
@@ -119,6 +120,8 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app):
+        for line in notes:
+            _note(line)
         _note("서버 준비 완료 — 폰에서 시작하세요 (끄려면 이 창에서 Ctrl+C)")
         yield
         auth_failures.cancel()
@@ -230,6 +233,16 @@ def create_app(settings: Settings, predictor: Predictor) -> FastAPI:
 def build_app() -> FastAPI:
     """uvicorn --factory server.app:build_app 진입점. 실제 모델을 올린다."""
     from .pose import PoseModel  # 단위 테스트가 GPU 모델을 불러오지 않도록 여기서 가져온다
+    from .pose_detail import load as load_detail
 
     settings = load_settings()
-    return create_app(settings, PoseModel(settings.model).predict)
+    if settings.detail == "off":
+        detail, notes = None, ("관절 17점 (DETAIL=off)",)
+    else:
+        detail, status = load_detail()
+        if detail is None:  # 서버는 멈추지 않고 17점으로 동작한다 (설계 6.5)
+            bar = "!" * 60
+            notes = (bar, f"관절 26점 모델을 쓰지 못해 17점으로 동작합니다 — {status}", bar)
+        else:
+            notes = (status,)
+    return create_app(settings, PoseModel(settings.model, detail=detail).predict, notes=notes)

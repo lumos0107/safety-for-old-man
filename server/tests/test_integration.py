@@ -15,6 +15,8 @@ from ultralytics.utils import ASSETS
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 
+from server.pose_detail import MODEL_PATH
+
 ROOT = Path(__file__).resolve().parents[2]
 TOKEN = "i" * 43
 
@@ -75,8 +77,11 @@ def test_bus_end_to_end(server):
     assert r["type"] == "result" and r["seq"] == 42
     assert (r["img_w"], r["img_h"]) == (810, 1080)
     assert len(r["people"]) >= 3
+    # 모델 파일이 있으면 관절 26점, 없으면 대비 동작으로 17점 (설계 6.5)
+    expected = ("halpe26", 26) if MODEL_PATH.exists() else ("coco17", 17)
+    assert r["layout"] == expected[0]
     for p in r["people"]:
-        assert len(p["kpts"]) == 17
+        assert len(p["kpts"]) == expected[1]
         assert all(0 <= v <= 1 for x, y, _ in p["kpts"] for v in (x, y))
 
 

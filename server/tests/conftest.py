@@ -17,9 +17,9 @@ def fake_predictor(img):
 
 @pytest.fixture
 def make_client():
-    def _make(predictor=fake_predictor, **overrides):
+    def _make(predictor=fake_predictor, notes=(), **overrides):
         settings = Settings(token=TOKEN, allowed_origins=frozenset({ORIGIN}), **overrides)
-        return TestClient(create_app(settings, predictor))
+        return TestClient(create_app(settings, predictor, notes=notes))
     return _make
 
 

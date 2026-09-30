@@ -27,3 +27,6 @@ __pycache__/
 *.gif
 *.bmp
 *.y4m
+
+# 관절 26점 모델 (tools/fetch_models.py로 받음)
+server/models/

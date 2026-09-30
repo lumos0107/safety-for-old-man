@@ -172,3 +172,11 @@ def test_origin_refusal_hint_says_restart_and_unknown_stays(make_client, caplog)
     with make_client() as client, client.websocket_connect("/ws", headers={"origin": "https://evil.example"}) as ws:
         assert closed_with(ws) == 4003
     assert "서버 재시작" in caplog.text and "모르는 주소면 그대로" in caplog.text
+
+
+def test_startup_notes_logged_before_ready(make_client, caplog):
+    caplog.set_level("WARNING", logger="pose")
+    with make_client(notes=("관절 26점 (RTMPose-m, GPU)",)):
+        pass
+    text = caplog.text
+    assert "관절 26점 (RTMPose-m, GPU)" in text and text.index("관절 26점") < text.index("서버 준비 완료")

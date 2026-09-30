@@ -8,6 +8,7 @@ from dotenv import dotenv_values
 DEFAULT_ENV = Path(__file__).resolve().parent / ".env"
 DEFAULT_ORIGINS = "https://lumos0107.github.io"
 MIN_TOKEN_LEN = 32
+DETAIL_CHOICES = ("halpe26", "off")  # 관절 26점(RTMPose) 켜기/끄기 — design/2026-09-30-body-detail-design.md 6.5
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class Settings:
     max_bytes: int = 1_048_576
     max_side: int = 2000
     model: str = "yolo11n-pose.pt"
+    detail: str = "halpe26"
 
     @property
     def model_name(self) -> str:
@@ -35,9 +37,13 @@ def load_settings(env_file: Path | None = DEFAULT_ENV) -> Settings:
 
     raw = values.get("ALLOWED_ORIGINS") or DEFAULT_ORIGINS
     origins = frozenset(o.strip().rstrip("/") for o in raw.split(",") if o.strip())
+    detail = (values.get("DETAIL") or "halpe26").strip().lower()
+    if detail not in DETAIL_CHOICES:
+        raise RuntimeError(f"DETAIL은 {' 또는 '.join(DETAIL_CHOICES)}만 됩니다 (지금: {detail!r}).")
     return Settings(
         token=token,
         allowed_origins=origins,
         auth_timeout=float(values.get("AUTH_TIMEOUT") or 3.0),
         model=values.get("MODEL") or "yolo11n-pose.pt",
+        detail=detail,
     )

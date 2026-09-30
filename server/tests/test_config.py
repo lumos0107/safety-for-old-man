@@ -12,7 +12,7 @@ GOOD = "a" * 43
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for key in ("TOKEN", "ALLOWED_ORIGINS", "AUTH_TIMEOUT", "MODEL"):
+    for key in ("TOKEN", "ALLOWED_ORIGINS", "AUTH_TIMEOUT", "MODEL", "DETAIL"):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -129,3 +129,17 @@ def test_gen_token_force_refuses_when_new_token_would_not_apply(tmp_path, origin
     assert "적용되지 않" in result.stderr
     assert env.read_text(encoding="utf-8") == original  # 파일은 건드리지 않는다
 
+
+
+def test_detail_default_and_off(monkeypatch):
+    monkeypatch.setenv("TOKEN", GOOD)
+    assert load_settings(env_file=None).detail == "halpe26"
+    monkeypatch.setenv("DETAIL", " OFF ")
+    assert load_settings(env_file=None).detail == "off"
+
+
+def test_unknown_detail_refused(monkeypatch):
+    monkeypatch.setenv("TOKEN", GOOD)
+    monkeypatch.setenv("DETAIL", "wholebody")
+    with pytest.raises(RuntimeError, match="DETAIL"):
+        load_settings(env_file=None)
